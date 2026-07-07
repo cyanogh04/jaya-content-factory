@@ -1,0 +1,17 @@
+# 시크릿 — 절대 커밋 금지
+.env
+
+# 생성 결과물
+outputs/
+
+# 보이스 프로파일 (개인 데이터)
+data/voice_profile*.json
+
+# 의존성
+node_modules/
+
+# 로그/기타
+*.log
+.DS_Store
+스크린샷*.png
+스크린샷*.jpg
