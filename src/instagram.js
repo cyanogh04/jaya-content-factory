@@ -99,11 +99,13 @@ async function getTokenExpiry(token) {
  * .env 파일의 INSTAGRAM_ACCESS_TOKEN 값을 새 토큰으로 교체.
  */
 async function saveTokenToEnv(newToken) {
+  // 런타임 환경변수는 .env 유무와 관계없이 즉시 갱신 (배포 환경엔 .env가 없음)
+  process.env.INSTAGRAM_ACCESS_TOKEN = newToken;
   let content;
   try {
     content = await fs.readFile(ENV_FILE, 'utf8');
   } catch {
-    return; // .env 없으면 건너뜀
+    return; // .env 없으면 파일 저장만 건너뜀
   }
   let updated = content.replace(
     /^INSTAGRAM_ACCESS_TOKEN=.*/m,
@@ -111,8 +113,6 @@ async function saveTokenToEnv(newToken) {
   );
   if (updated === content) updated += `\nINSTAGRAM_ACCESS_TOKEN=${newToken}`;
   await fs.writeFile(ENV_FILE, updated, 'utf8');
-  // 런타임 환경변수도 즉시 갱신
-  process.env.INSTAGRAM_ACCESS_TOKEN = newToken;
 }
 
 /**
@@ -151,7 +151,33 @@ const TOKEN_EXPIRED_MESSAGE =
   'Instagram 액세스 토큰이 만료됐습니다. /api/exchange-token에 Graph API Explorer의 단기 토큰을 보내 장기 토큰으로 교환하세요.';
 
 /**
- * Facebook Pages에서 연결된 Instagram Business Account ID를 찾아 반환.
+ * 토큰의 권한 목록(debug_token granular_scopes)에서 instagram_basic이 부여된
+ * Instagram 계정 ID를 추출. 페이지 권한(pages_show_list) 없이도 동작한다.
+ */
+async function findIgIdFromTokenScopes(token) {
+  const appId = process.env.INSTAGRAM_APP_ID;
+  const appSecret = process.env.INSTAGRAM_APP_SECRET;
+  if (!appId || !appSecret) return null;
+
+  const url =
+    `https://graph.facebook.com/debug_token` +
+    `?input_token=${encodeURIComponent(token)}` +
+    `&access_token=${encodeURIComponent(appId + '|' + appSecret)}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    const granular = data?.data?.granular_scopes || [];
+    const ig = granular.find((s) => s.scope === 'instagram_basic' && s.target_ids?.length > 0);
+    return ig?.target_ids[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 연결된 Instagram Business Account ID를 찾아 반환.
+ * 시도 1: /me/accounts (pages_show_list 권한 필요)
+ * 시도 2: 토큰 권한 정보에서 instagram_basic 대상 계정 추출 (페이지 권한 불필요)
  * 찾으면 .env의 IG_USER_ID도 업데이트.
  */
 async function discoverIgUserId(token) {
@@ -174,28 +200,32 @@ async function discoverIgUserId(token) {
         return igId;
       }
     }
-    if (pages.length === 0) {
-      throw new Error(
-        'Graph API Explorer 토큰에 pages_show_list 권한이 없거나 관리 중인 Facebook 페이지가 없습니다. ' +
-        'Graph API Explorer → 권한에 pages_show_list 추가 → 토큰 재생성 → Instagram 토큰 교환을 다시 해주세요.'
-      );
-    }
-    throw new Error(
-      `Facebook 페이지 ${pages.length}개를 찾았지만 연결된 Instagram 비즈니스/크리에이터 계정이 없습니다. ` +
-      'Instagram 앱에서 계정 → 프로페셔널 도구 → Instagram 비즈니스 계정으로 전환 후, Facebook 페이지와 연결하세요.'
-    );
+  } else {
+    console.warn(`페이지 목록 조회 실패(${data.error.message}) → 토큰 권한 정보로 재시도...`);
   }
 
-  throw new Error(`Instagram 계정 자동탐색 실패: ${data.error.message}`);
+  // 시도 2: 페이지가 없거나 조회 실패 → 토큰 권한 정보에서 IG 계정 추출
+  const igId = await findIgIdFromTokenScopes(token);
+  if (igId) {
+    console.log(`Instagram 계정 발견: ID ${igId} ← 토큰 권한 정보(instagram_basic)`);
+    await saveIgUserIdToEnv(igId);
+    return igId;
+  }
+
+  throw new Error(
+    'Instagram 계정을 찾지 못했습니다. Graph API Explorer에서 instagram_basic 권한을 포함해 ' +
+    '토큰을 다시 발급한 뒤 [Instagram 토큰 교환]을 실행하거나, [캡션 직접 입력]으로 학습하세요.'
+  );
 }
 
 async function saveIgUserIdToEnv(id) {
+  // 런타임 환경변수는 .env 유무와 관계없이 즉시 갱신 (배포 환경엔 .env가 없음)
+  process.env.IG_USER_ID = id;
   let content;
   try { content = await fs.readFile(ENV_FILE, 'utf8'); } catch { return; }
   let updated = content.replace(/^IG_USER_ID=.*/m, `IG_USER_ID=${id}`);
   if (updated === content) updated += `\nIG_USER_ID=${id}`;
   await fs.writeFile(ENV_FILE, updated, 'utf8');
-  process.env.IG_USER_ID = id;
 }
 
 /**

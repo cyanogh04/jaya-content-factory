@@ -415,5 +415,7 @@ function showToast(message) {
   el.className = 'toast';
   el.textContent = message;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2200);
+  // 긴 메시지(주로 오류 안내)는 읽을 시간을 충분히 준다
+  const duration = message.length > 40 ? Math.min(9000, 3500 + message.length * 30) : 2200;
+  setTimeout(() => el.remove(), duration);
 }
