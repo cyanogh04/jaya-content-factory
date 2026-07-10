@@ -220,10 +220,17 @@ app.get('/api/debug-instagram', async (req, res) => {
 
 // ───────────────────────── POST /api/learn-voice ─────────────────────────
 
+// Render 환경에서 Supabase 미연결이면 재시작 시 새 프로파일이 사라진다는 경고 문구
+function profilePersistWarning() {
+  return process.env.RENDER && !isSupabase()
+    ? ' ⚠️ 단, 서버가 재시작되면 이 프로파일은 예전 것으로 돌아갑니다 — Render의 Secret File(voice_profile.json)을 새 프로파일로 갱신하거나 Supabase를 연결하세요.'
+    : '';
+}
+
 app.post('/api/learn-voice', async (req, res) => {
   try {
     const { captionCount } = await learnVoice();
-    res.json({ message: `보이스 프로파일 갱신 완료 — 인스타 캡션 ${captionCount}개를 학습했습니다.` });
+    res.json({ message: `보이스 프로파일 갱신 완료 — 인스타 캡션 ${captionCount}개를 학습했습니다.${profilePersistWarning()}` });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: err.message });
@@ -239,7 +246,7 @@ app.post('/api/learn-voice-text', async (req, res) => {
   }
   try {
     const { captionCount } = await learnVoice({ captions });
-    res.json({ message: `보이스 프로파일 갱신 완료 — 캡션 ${captionCount}개를 학습했습니다.` });
+    res.json({ message: `보이스 프로파일 갱신 완료 — 캡션 ${captionCount}개를 학습했습니다.${profilePersistWarning()}` });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: err.message });
