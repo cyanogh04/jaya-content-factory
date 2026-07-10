@@ -179,7 +179,11 @@ export async function saveVoiceProfile(profile) {
   if (error) throw new Error(`${step}: Supabase 오류 — ${error.message}`);
 }
 
-/** 보이스 프로파일 로드: Supabase 우선 → 로컬 파일 → null */
+// Render Secret File 경로 — 배포판의 디스크는 휘발성이라, 대시보드에 등록한
+// 비밀 파일(/etc/secrets/voice_profile.json)을 영구 폴백으로 사용한다.
+const SECRET_VOICE_FILE = '/etc/secrets/voice_profile.json';
+
+/** 보이스 프로파일 로드: Supabase → 로컬 파일 → Render Secret File → null */
 export async function getVoiceProfile() {
   if (supabase) {
     const { data, error } = await supabase
@@ -190,7 +194,7 @@ export async function getVoiceProfile() {
     if (error) throw new Error(`DB 조회(voice_profile): Supabase 오류 — ${error.message}`);
     if (data?.profile) return data.profile;
   }
-  return readJsonSafe(VOICE_FILE);
+  return (await readJsonSafe(VOICE_FILE)) || (await readJsonSafe(SECRET_VOICE_FILE));
 }
 
 export { DATA_DIR, VOICE_FILE, OUTPUTS_DIR };
