@@ -186,13 +186,18 @@ const SECRET_VOICE_FILE = '/etc/secrets/voice_profile.json';
 /** 보이스 프로파일 로드: Supabase → 로컬 파일 → Render Secret File → null */
 export async function getVoiceProfile() {
   if (supabase) {
+    // 조회 실패(테이블 없음·키 오류 등)로 생성 전체가 막히지 않도록 파일 폴백으로 넘어간다.
+    // 저장(saveVoiceProfile) 오류는 설정 문제를 드러내야 하므로 그대로 던진다.
     const { data, error } = await supabase
       .from('voice_profile')
       .select('profile')
       .eq('id', 1)
       .maybeSingle();
-    if (error) throw new Error(`DB 조회(voice_profile): Supabase 오류 — ${error.message}`);
-    if (data?.profile) return data.profile;
+    if (error) {
+      console.warn(`DB 조회(voice_profile): Supabase 오류 — ${error.message} → 파일 폴백 사용`);
+    } else if (data?.profile) {
+      return data.profile;
+    }
   }
   return (await readJsonSafe(VOICE_FILE)) || (await readJsonSafe(SECRET_VOICE_FILE));
 }
