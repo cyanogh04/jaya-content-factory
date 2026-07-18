@@ -4,6 +4,7 @@
 // POST /api/revise      — { jobId, type, instruction } → { content }
 // POST /api/regenerate  — { jobId } → { carousel, capture }
 // POST /api/learn-voice — {} → { message }
+// GET  /api/jobs        — → { jobs } (지난 작업 목록, 최신순)
 // GET  /api/job/:id     — → { job, contents }
 // GET  /api/status      — 환경변수/저장소 상태 (프론트 안내용)
 
@@ -16,7 +17,7 @@ import { generateAll, revise, regenerateSecondary } from './generate.js';
 import { learn as learnVoice } from './voice.js';
 import { exchangeToLongLived, autoRefreshIfNeeded } from './instagram.js';
 import { saveLectureToNotion } from './notion.js';
-import { getJob, getContents, getLatestContent, getVoiceProfile, isSupabase } from './db.js';
+import { getJob, getContents, getLatestContent, getVoiceProfile, isSupabase, listJobs } from './db.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
@@ -248,6 +249,18 @@ app.post('/api/learn-voice-text', async (req, res) => {
   try {
     const { captionCount } = await learnVoice({ captions });
     res.json({ message: `보이스 프로파일 갱신 완료 — 캡션 ${captionCount}개를 학습했습니다.${profilePersistWarning()}` });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ───────────────────────── GET /api/jobs — 지난 작업 히스토리 ─────────────────────────
+
+app.get('/api/jobs', async (req, res) => {
+  try {
+    const jobs = await listJobs();
+    res.json({ jobs });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: err.message });

@@ -25,11 +25,15 @@ const $manualModal         = $('manual-caption-modal');
 const $manualInput         = $('manual-captions-input');
 const $manualSubmit        = $('manual-caption-submit');
 const $manualCancel        = $('manual-caption-cancel');
+const $historyPanel        = $('history-panel');
+const $historyList         = $('history-list');
+const $historyCount        = $('history-count');
 
 // ─── 초기화 ───────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   checkStatus();
   bindEvents();
+  loadHistory();
 });
 
 async function checkStatus() {
@@ -103,6 +107,93 @@ function bindEvents() {
   $manualSubmit.addEventListener('click', handleLearnVoiceManual);
 }
 
+// ─── 지난 작업 히스토리 ──────────────────────────────────
+async function loadHistory() {
+  try {
+    const data = await apiFetch('GET', '/api/jobs');
+    renderHistory(data.jobs || []);
+  } catch {
+    // 히스토리 로드 실패는 조용히 처리 — 메인 기능에 영향 없음
+  }
+}
+
+function renderHistory(jobs) {
+  if (jobs.length === 0) {
+    $historyPanel.setAttribute('hidden', '');
+    return;
+  }
+  $historyCount.textContent = `${jobs.length}건`;
+  $historyList.innerHTML = '';
+
+  jobs.forEach((job) => {
+    const li = document.createElement('li');
+    li.className = 'history-item';
+    li.tabIndex = 0;
+    li.dataset.jobId = job.id;
+
+    const d = new Date(job.created_at);
+    const dateEl = document.createElement('span');
+    dateEl.className = 'history-date';
+    dateEl.textContent = isNaN(d)
+      ? ''
+      : `${d.getFullYear()}. ${String(d.getMonth() + 1).padStart(2, '0')}. ${String(d.getDate()).padStart(2, '0')}`;
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'history-topic';
+    titleEl.textContent = job.topic || job.video_title || (job.vimeo_url ? `영상 ${job.vimeo_url.split('/').pop()}` : '제목 없음');
+
+    const openEl = document.createElement('span');
+    openEl.className = 'history-open';
+    openEl.textContent = '보기 →';
+
+    li.append(dateEl, titleEl, openEl);
+    li.addEventListener('click', () => openJob(job.id, li));
+    li.addEventListener('keydown', (e) => { if (e.key === 'Enter') openJob(job.id, li); });
+    $historyList.appendChild(li);
+  });
+
+  $historyPanel.removeAttribute('hidden');
+}
+
+/** 지난 작업 열기 — 저장된 콘텐츠(타입별 최신 버전)를 카드에 표시 */
+async function openJob(jobId, itemEl) {
+  setActiveHistoryItem(itemEl);
+
+  $results.removeAttribute('hidden');
+  TYPES.forEach(setCardLoading);
+  $regenRow.setAttribute('hidden', '');
+
+  try {
+    const data = await apiFetch('GET', `/api/job/${jobId}`);
+    currentJobId = jobId;
+    TYPES.forEach((t) => { sectionContent[t] = null; });
+
+    TYPES.forEach((type) => {
+      const rows = (data.contents || []).filter((c) => c.type === type);
+      if (rows.length === 0) {
+        setCardEmpty(type);
+        return;
+      }
+      const latest = rows.reduce((a, b) => (a.version >= b.version ? a : b));
+      setCardContent(type, latest.content);
+    });
+
+    if (sectionContent['cafe'] && sectionContent['caption']) {
+      $regenRow.removeAttribute('hidden');
+      $saveNotionBtn.disabled = !TYPES.every((t) => sectionContent[t]);
+    }
+    $results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    TYPES.forEach((t) => setCardError(t, err.message));
+    showToast(`⚠️ ${err.message}`);
+  }
+}
+
+function setActiveHistoryItem(itemEl) {
+  document.querySelectorAll('.history-item.is-active').forEach((el) => el.classList.remove('is-active'));
+  if (itemEl) itemEl.classList.add('is-active');
+}
+
 // ─── 생성 ─────────────────────────────────────────────────
 async function handleGenerate() {
   const url = $url.value.trim();
@@ -111,6 +202,7 @@ async function handleGenerate() {
 
   // 상태 초기화
   currentJobId = null;
+  setActiveHistoryItem(null); // 새 생성 시작 — 히스토리 선택 해제
   TYPES.forEach((t) => { sectionContent[t] = null; });
   $regenRow.setAttribute('hidden', '');
 
@@ -191,6 +283,7 @@ function handleSSEEvent(event, data) {
       // 4종 모두 완성된 경우에만 노션 저장 활성화
       $saveNotionBtn.disabled = !TYPES.every((t) => sectionContent[t]);
     }
+    loadHistory(); // 방금 만든 작업이 히스토리에 바로 보이도록 갱신
   } else if (event === 'error') {
     TYPES.forEach((t) => { if (!sectionContent[t]) setCardError(t, data.error); });
   }
@@ -241,6 +334,20 @@ function setCardContent(type, content) {
   }
 
   // 재생성 버튼은 done 이벤트에서만 표시 (race condition 방지)
+}
+
+/** 히스토리에서 연 작업에 해당 섹션 콘텐츠가 없을 때 */
+function setCardEmpty(type) {
+  sectionContent[type] = null;
+  const body = $(`body-${type}`);
+  body.innerHTML = '<p class="empty-msg">이 작업에서는 생성되지 않은 섹션입니다.</p>';
+  const card = $(`card-${type}`);
+  card.classList.remove('is-done', 'is-error');
+  card.querySelector('.btn-copy').disabled = true;
+  const reviseBtn = card.querySelector('.btn-revise');
+  if (reviseBtn) reviseBtn.disabled = true;
+  const revRow = $(`revision-${type}`);
+  if (revRow) revRow.setAttribute('hidden', '');
 }
 
 function setCardError(type, message) {

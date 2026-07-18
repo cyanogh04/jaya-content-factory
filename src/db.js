@@ -78,6 +78,37 @@ export async function saveJob(jobData) {
   return job;
 }
 
+/** 작업 목록 조회 (최신순) — 히스토리 표시용. 자막 등 무거운 필드는 제외 */
+export async function listJobs(limit = 50) {
+  const step = 'DB 조회(jobs 목록)';
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('jobs')
+      .select('id, video_id, video_title, vimeo_url, topic, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(`${step}: Supabase 오류 — ${error.message}`);
+    return data || [];
+  }
+  // 파일 폴백
+  let entries;
+  try {
+    entries = await fs.readdir(OUTPUTS_DIR, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const jobs = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const job = await readJsonSafe(path.join(OUTPUTS_DIR, entry.name, 'job.json'));
+    if (!job) continue;
+    const { transcript_compressed, transcript_full, ...lite } = job;
+    jobs.push(lite);
+  }
+  jobs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  return jobs.slice(0, limit);
+}
+
 /** jobId로 작업 조회 (없으면 null) */
 export async function getJob(jobId) {
   const step = 'DB 조회(job)';
