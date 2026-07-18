@@ -44,6 +44,7 @@ app.get('/api/status', async (req, res) => {
     missingVoiceEnv,
     hasVoiceProfile,
     storage: isSupabase() ? 'supabase' : 'file',
+    commit: process.env.RENDER_GIT_COMMIT || null, // 배포된 코드 버전 확인용
   });
 });
 

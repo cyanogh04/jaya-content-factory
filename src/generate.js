@@ -38,7 +38,8 @@ function buildSectionSpecs({ voice, topic, compressed, full }) {
       type: 'carousel',
       model: MODELS.CAROUSEL,
       transcript: compressed,
-      prompt: buildCarouselPrompt({ topic }),
+      prompt: buildCarouselPrompt({ voice, topic }),
+      maxTokens: 16000, // 장면 지시서 형식이라 출력이 길다 — 잘림 방지
     },
     {
       type: 'capture',
@@ -99,7 +100,7 @@ export async function generateAll({ url, topic, onProgress = () => {} }) {
         system: COMMON_HEADER,
         prompt: spec.prompt,
         transcript: spec.transcript,
-        maxTokens: 8000,
+        maxTokens: spec.maxTokens || 8000,
         step: `${label} 생성`,
       });
       await saveContent(job.id, spec.type, content);
@@ -174,15 +175,16 @@ export async function regenerateSecondary({ jobId }) {
     throw new Error(`${step}: 확정된 카페 서머리와 인스타 캡션이 모두 필요합니다. 먼저 두 콘텐츠를 생성/수정 완료하세요.`);
   }
 
+  const voice = await loadVoice();
   const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined };
 
   console.log('캐러셀 기획 재생성 중...');
   const carousel = await callClaude({
     model: MODELS.CAROUSEL,
     system: COMMON_HEADER,
-    prompt: buildRegeneratePrompt({ type: 'carousel', ...context }),
+    prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice }),
     transcript: job.transcript_compressed,
-    maxTokens: 8000,
+    maxTokens: 16000,
     step: '캐러셀 기획 재생성',
   });
   await saveContent(jobId, 'carousel', carousel);
