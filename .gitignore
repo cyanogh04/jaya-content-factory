@@ -10,6 +10,9 @@ data/voice_profile*.json
 # 의존성
 node_modules/
 
+# 검토용 임시 산출물 (프롬프트 테스트 결과 등)
+검토용_*.md
+
 # 로그/기타
 *.log
 .DS_Store

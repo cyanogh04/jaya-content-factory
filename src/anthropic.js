@@ -27,10 +27,12 @@ export const MODELS = {
  * @param {string} opts.prompt     - 작업 지시 프롬프트 (user 메시지의 마지막 블록)
  * @param {string} [opts.transcript] - 자막 텍스트. 있으면 캐시 블록으로 분리 삽입.
  * @param {number} [opts.maxTokens]  - 기본 8000 (한국어 출력이 길어 4000 이상 권장)
+ * @param {number} [opts.timeoutMs]  - 응답 대기 한도. 미지정 시 maxTokens에 비례해 자동 산정.
+ *                                     (캐러셀처럼 maxTokens 16000짜리 호출은 120초로는 모자란다)
  * @param {string} [opts.step]       - 에러 메시지에 붙일 단계명
  * @returns {Promise<string>} 응답 텍스트
  */
-export async function callClaude({ model, system, prompt, transcript, maxTokens = 8000, step = 'Claude 생성' }) {
+export async function callClaude({ model, system, prompt, transcript, maxTokens = 8000, timeoutMs, step = 'Claude 생성' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(`${step}: ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.`);
@@ -56,8 +58,11 @@ export async function callClaude({ model, system, prompt, transcript, maxTokens 
     body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
   }
 
+  // 출력이 길수록 오래 걸린다. 대략 1000 토큰당 20초 + 여유 60초, 최소 120초.
+  const limitMs = timeoutMs ?? Math.max(120_000, 60_000 + (maxTokens / 1000) * 20_000);
+
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const timeout = setTimeout(() => controller.abort(), limitMs);
 
   let res;
   try {
@@ -75,7 +80,7 @@ export async function callClaude({ model, system, prompt, transcript, maxTokens 
   } catch (err) {
     clearTimeout(timeout);
     if (err.name === 'AbortError') {
-      throw new Error(`${step}: Anthropic API 응답 시간 초과 (120초). 잠시 후 다시 시도하세요.`);
+      throw new Error(`${step}: Anthropic API 응답 시간 초과 (${Math.round(limitMs / 1000)}초). 잠시 후 다시 시도하세요.`);
     }
     throw new Error(`${step}: Anthropic API 네트워크 오류 — ${err.message}`);
   }
