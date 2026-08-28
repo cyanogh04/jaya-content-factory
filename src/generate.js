@@ -95,10 +95,12 @@ export async function generateAll({ url, topic, onProgress = () => {} }) {
     const label = TYPE_LABELS[spec.type];
     console.log(`${label} 생성 중...`);
     try {
+      // 캡쳐 가이드는 카페 서머리의 "📷 캡쳐 n" 자리와 맞물려야 하므로, 앞서 생성된 카페 글을 넘긴다
+      const prompt = spec.type === 'capture' ? buildCapturePrompt({ cafe: results.cafe }) : spec.prompt;
       const content = await callClaude({
         model: spec.model,
         system: COMMON_HEADER,
-        prompt: spec.prompt,
+        prompt,
         transcript: spec.transcript,
         maxTokens: spec.maxTokens || 8000,
         step: `${label} 생성`,
