@@ -354,6 +354,76 @@ input[type="text"]:focus {
   padding: 8px 12px;
 }
 
+/* 캐러셀: 후크 안 선택 칩 + 자유 수정 입력을 위아래로 쌓는다 */
+.revision-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.revision-input-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hook-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hook-picker-label {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--navy);
+  letter-spacing: .01em;
+}
+.hook-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hook-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: .86rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+.hook-chip:hover:not(:disabled) { border-color: var(--navy); background: var(--beige-light); }
+.hook-chip:disabled { cursor: default; opacity: .9; }
+.hook-chip.is-current {
+  border-color: var(--navy);
+  background: var(--beige-light);
+}
+.hook-chip-key {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--navy);
+  font-size: .8rem;
+  white-space: nowrap;
+}
+.hook-chip-head {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: keep-all;
+}
+.hook-chip-tag {
+  flex-shrink: 0;
+  font-size: .74rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.hook-chip.is-current .hook-chip-tag { color: var(--success); font-weight: 600; }
+
 /* ─── 재생성 버튼 행 ────────────────────────────────────── */
 .regen-row {
   display: flex;

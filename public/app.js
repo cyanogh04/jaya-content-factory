@@ -78,7 +78,7 @@ function bindEvents() {
   });
 
   // 수정 입력창 Enter
-  ['cafe', 'caption'].forEach((type) => {
+  ['cafe', 'caption', 'carousel'].forEach((type) => {
     $(`revise-${type}`).addEventListener('keydown', (e) => {
       if (e.key === 'Enter') handleRevise(type);
     });
@@ -325,13 +325,16 @@ function setCardContent(type, content) {
     }
   }
 
-  // 수정 요청 행 표시 (cafe, caption만) — jobId가 있을 때 버튼도 활성화
+  // 수정 요청 행 표시 (cafe, caption, carousel) — jobId가 있을 때 버튼도 활성화
   const revRow = $(`revision-${type}`);
   if (revRow) {
     revRow.removeAttribute('hidden');
     const reviseBtn = revRow.querySelector('.btn-revise');
     if (reviseBtn) reviseBtn.disabled = !currentJobId;
   }
+
+  // 캐러셀: 기획안의 [후크 후보] A안/B안/C안을 버튼으로 — 다른 안을 누르면 그 안으로 1컷부터 재기획
+  if (type === 'carousel') renderHookPicker(content);
 
   // 재생성 버튼은 done 이벤트에서만 표시 (race condition 방지)
 }
@@ -363,28 +366,120 @@ function setCardError(type, message) {
 }
 
 // ─── 수정 재생성 ──────────────────────────────────────────
-async function handleRevise(type) {
+/**
+ * @param {string} type - cafe | caption | carousel
+ * @param {string} [instructionOverride] - 입력창 대신 쓸 지시(후크 안 버튼이 넘긴다)
+ * @param {string} [doneMessage] - 완료 토스트 문구
+ */
+async function handleRevise(type, instructionOverride, doneMessage) {
   if (!currentJobId) { showToast('생성이 완료된 후 수정할 수 있습니다'); return; }
-  const instruction = $(`revise-${type}`).value.trim();
+  const instruction = (instructionOverride || $(`revise-${type}`).value).trim();
   if (!instruction) { $(`revise-${type}`).focus(); return; }
 
   const reviseBtn = document.querySelector(`.btn-revise[data-type="${type}"]`);
   reviseBtn.disabled = true;
   reviseBtn.textContent = '재생성 중…';
 
+  // 이전 콘텍스트를 남겨 실패 시 되돌릴 수 있게 한다 (수정 실패로 원본까지 잃지 않도록)
+  const previous = sectionContent[type];
   setCardLoading(type);
 
   try {
     const data = await apiFetch('POST', '/api/revise', { jobId: currentJobId, type, instruction });
     setCardContent(type, data.content);
     $(`revise-${type}`).value = '';
-    showToast('수정 완료');
+    showToast(doneMessage || '수정 완료');
   } catch (err) {
-    setCardError(type, err.message);
+    if (previous) {
+      setCardContent(type, previous);
+      showToast(`⚠️ 수정 실패 — 이전 버전을 그대로 둡니다: ${err.message}`);
+    } else {
+      setCardError(type, err.message);
+    }
   } finally {
     reviseBtn.disabled = false;
     reviseBtn.textContent = '재생성';
   }
+}
+
+// ─── 캐러셀 후크 안 선택 ──────────────────────────────────
+// 기획안 [기획 개요]의 후크 후보 표기(프롬프트가 고정한 계약):
+//   · A안 [공감형] 헤드카피 → 근거
+//   · B안 [참여유도형] 헤드카피 → 근거
+//   · C안 [공감형] 헤드카피 → 근거
+//   · 채택: A안 → 이유
+// 개요 구간(첫 "## CUT" 이전)만 읽어 카드 텍스트와 섞이지 않게 한다.
+const HOOK_CAND_RE = /^\s*[·•\-*]?\s*\**([ABC])안\**\s*[\[［(（]\s*(공감형|참여유도형)\s*[\]］)）]\s*[:：]?\s*(.+)$/;
+const HOOK_ADOPT_RE = /^\s*[·•\-*]?\s*\**채택\**\s*[:：]?\s*\**\s*([ABC])안/;
+
+function parseHookCandidates(text) {
+  if (!text) return null;
+  const cutIdx = text.search(/^##\s*CUT\s*\d+/m);
+  const overview = cutIdx > 0 ? text.slice(0, cutIdx) : text;
+
+  const byKey = new Map();
+  let adopted = null;
+  for (const raw of overview.split('\n')) {
+    const m = raw.match(HOOK_CAND_RE);
+    if (m) {
+      const [, key, kind, rest] = m;
+      // 근거는 → / — / | 뒤에 붙는다. 헤드카피만 남기고 감싼 따옴표·굵게 표시를 벗긴다.
+      const head = rest.split(/\s*(?:→|—|\||--)\s*/)[0]
+        .replace(/\*\*/g, '')
+        .replace(/^["“「『']+|["”」』']+$/g, '')
+        .trim();
+      if (head && !byKey.has(key)) byKey.set(key, { key, kind, head });
+      continue;
+    }
+    const a = raw.match(HOOK_ADOPT_RE);
+    if (a && !adopted) adopted = a[1];
+  }
+  const cands = ['A', 'B', 'C'].filter((k) => byKey.has(k)).map((k) => byKey.get(k));
+  if (cands.length < 2) return null; // 고를 게 없으면 버튼을 만들지 않는다 (자유 입력창은 그대로)
+  return { cands, adopted };
+}
+
+function renderHookPicker(content) {
+  const picker = $('hooks-carousel');
+  const chips = $('hook-chips-carousel');
+  if (!picker || !chips) return;
+  chips.innerHTML = '';
+
+  const parsed = parseHookCandidates(content);
+  if (!parsed) { picker.setAttribute('hidden', ''); return; }
+
+  parsed.cands.forEach(({ key, kind, head }) => {
+    const isCurrent = key === parsed.adopted;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hook-chip' + (isCurrent ? ' is-current' : '');
+    btn.disabled = isCurrent || !currentJobId;
+    btn.title = isCurrent ? '현재 기획안이 채택한 안' : `${key}안(${kind})으로 1컷부터 다시 기획`;
+
+    const keyEl = document.createElement('span');
+    keyEl.className = 'hook-chip-key';
+    keyEl.textContent = `${key}안 · ${kind}`;
+    const headEl = document.createElement('span');
+    headEl.className = 'hook-chip-head';
+    headEl.textContent = head;
+    const tagEl = document.createElement('span');
+    tagEl.className = 'hook-chip-tag';
+    tagEl.textContent = isCurrent ? '현재 채택' : '이 안으로 다시 기획 →';
+    btn.append(keyEl, headEl, tagEl);
+
+    if (!isCurrent) {
+      btn.addEventListener('click', () => {
+        const instruction =
+          `후크 후보 ${key}안(${kind}) "${head}"을 채택안으로 바꿔 CUT 1부터 다시 기획한다. ` +
+          `후크 후보 A안·B안·C안의 문구는 그대로 두고 '채택' 줄만 ${key}안으로 옮긴다. ` +
+          `1컷이 바뀌면서 어긋나는 열린 고리·감정 곡선·연결 컷만 함께 맞추고, 나머지 컷은 유지한다.`;
+        showToast(`${key}안(${kind})으로 다시 기획 중…`);
+        handleRevise('carousel', instruction, `${key}안(${kind})으로 다시 기획했습니다`);
+      });
+    }
+    chips.appendChild(btn);
+  });
+  picker.removeAttribute('hidden');
 }
 
 // ─── 노션 저장 ───────────────────────────────────────

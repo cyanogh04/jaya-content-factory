@@ -1,4 +1,4 @@
-// src/generate.js — 4종 순차 생성 오케스트레이션 + 수정(revise) + 재생성(regenerateSecondary)
+// src/generate.js — 4종 순차 생성 오케스트레이션 + 수정(revise: cafe·caption·carousel) + 재생성(regenerateSecondary)
 //
 // 생성 순서: cafe → caption → carousel → capture
 // 자막 사용: cafe·caption·carousel → compressed / capture → full (타임스탬프 정확도)
@@ -16,8 +16,103 @@ import {
   buildCapturePrompt,
   buildRevisePrompt,
   buildRegeneratePrompt,
+  CAROUSEL_CUT_MIN,
+  CAROUSEL_CUT_MAX,
 } from './prompts.js';
 import { saveJob, saveContent, getJob, getLatestContent } from './db.js';
+
+/**
+ * 캐러셀 컷 수 공통 규칙 검증 — 기획안은 그대로 캐러셀 공장에서 카드로 만들어지므로
+ * (1) 실제 CUT 개수가 CAROUSEL_CUT_MIN~MAX 안인지, (2) CUT 번호가 1부터 빠짐없이 이어지는지 확인하고
+ * (3) 개요의 "총 컷 수" 숫자가 실제 CUT 개수와 다르면 실제 개수로 바로잡는다(모델이 가장 자주 틀리는 지점).
+ * 컷을 늘리거나 잘라내는 건 코드가 판단할 일이 아니라 경고만 남긴다.
+ *
+ * @param {string} content 캐러셀 기획안 원문
+ * @param {string} [label] 로그 접두어
+ * @returns {{ content: string, count: number, warnings: string[] }}
+ */
+export function normalizeCarouselCuts(content, label = '캐러셀 기획') {
+  const warnings = [];
+  const nums = [...content.matchAll(/^##\s*CUT\s*(\d+)\b/gm)].map((m) => Number(m[1]));
+  const count = nums.length;
+
+  if (count === 0) {
+    warnings.push('CUT 헤더(## CUT n)를 하나도 찾지 못했습니다 — 출력 형식이 깨졌을 수 있습니다.');
+  } else {
+    if (count < CAROUSEL_CUT_MIN || count > CAROUSEL_CUT_MAX) {
+      warnings.push(`컷 수 ${count}개 — 공통 규칙(${CAROUSEL_CUT_MIN}~${CAROUSEL_CUT_MAX}컷) 밖입니다.`);
+    }
+    const sequential = nums.every((n, i) => n === i + 1);
+    if (!sequential) warnings.push(`CUT 번호가 1부터 이어지지 않습니다: ${nums.join(', ')}`);
+  }
+
+  let fixed = content;
+  if (count > 0) {
+    // 예: "- **총 컷 수**: 13컷 (…)" → 실제 개수로 교정
+    fixed = content.replace(/(\*\*총 컷 수\*\*\s*[:：]\s*)(\d+)(\s*컷)/, (whole, pre, num, post) => {
+      if (Number(num) === count) return whole;
+      warnings.push(`개요의 총 컷 수 ${num}컷 → 실제 CUT 개수 ${count}컷으로 교정했습니다.`);
+      return `${pre}${count}${post}`;
+    });
+  }
+
+  warnings.forEach((w) => console.warn(`${label} 컷 수 검증: ${w}`));
+  return { content: fixed, count, warnings };
+}
+
+/**
+ * 캐러셀 기획안 마무리 — 컷 수 검증·교정을 하고, 컷 수가 공통 규칙 밖이면 **한 번만** 모델에 되돌려 맞춘다.
+ * (14컷 초과·10컷 미만은 카드 제작 자체가 막히므로 경고로 끝내지 않는다. 그래도 안 맞으면 경고와 함께 그대로 저장.)
+ *
+ * @param {object} o
+ * @param {string} o.content 모델이 낸 기획안
+ * @param {object} o.job 작업 행(transcript_compressed·topic 사용)
+ * @param {object} o.voice 보이스 프로파일
+ * @param {string} [o.cafe] 확정 카페 서머리(있으면 컨텍스트)
+ * @param {string} [o.caption] 확정 인스타 캡션(있으면 컨텍스트)
+ * @param {string} o.label 로그 접두어
+ * @returns {Promise<string>} 최종 기획안
+ */
+export async function finalizeCarousel({ content, job, voice, cafe, caption, label }) {
+  let { content: fixed, count } = normalizeCarouselCuts(content, label);
+  const inRange = (n) => n >= CAROUSEL_CUT_MIN && n <= CAROUSEL_CUT_MAX;
+  if (count === 0 || inRange(count)) return fixed;
+
+  const target = count > CAROUSEL_CUT_MAX ? CAROUSEL_CUT_MAX : CAROUSEL_CUT_MIN;
+  const how =
+    count > CAROUSEL_CUT_MAX
+      ? `detail·proof·empathy 구간에서 가장 약한 컷을 버려 ${target}컷으로 줄인다. 버린 detail 항목은 solution 목록의 항목명으로만 남긴다.`
+      : `empathy·detail·proof·objection·result 확장 구간에서 자막 근거가 있는 컷을 보태 ${target}컷으로 늘린다. 같은 말을 반복하는 컷은 넣지 않는다.`;
+  const instruction =
+    `현재 기획안은 총 ${count}컷으로 [컷 수 공통 규칙](${CAROUSEL_CUT_MIN}~${CAROUSEL_CUT_MAX}컷)을 어긴다. ${how} ` +
+    `hook·audience·turn·solution·urgency·cta 고정 컷과 역할 순서, 후크 후보, audience/solution 표기 형식은 그대로 두고, ` +
+    `개요의 총 컷 수·감정 곡선·CUT 번호를 실제 개수에 맞춘다.`;
+
+  console.warn(`${label}: 컷 수 ${count}개 → ${target}컷으로 맞추는 재요청 1회`);
+  const retried = await callClaude({
+    model: MODELS.CAROUSEL,
+    system: COMMON_HEADER,
+    prompt: buildRevisePrompt({
+      type: 'carousel',
+      original: fixed,
+      instruction,
+      voice,
+      topic: job.topic || undefined,
+      cafe,
+      caption,
+    }),
+    transcript: job.transcript_compressed,
+    maxTokens: 16000,
+    step: `${label} 컷 수 조정`,
+  });
+  const second = normalizeCarouselCuts(retried, `${label} 컷 수 조정`);
+  if (second.count > 0 && inRange(second.count)) {
+    console.log(`${label}: 컷 수 ${second.count}컷으로 조정 완료`);
+    return second.content;
+  }
+  console.warn(`${label}: 재요청 후에도 컷 수 ${second.count}개 — 규칙 밖 상태로 저장합니다. 화면에서 수정 요청으로 맞춰 주세요.`);
+  return second.count > 0 ? second.content : fixed;
+}
 
 /** 섹션별 호출 사양 구성 */
 function buildSectionSpecs({ voice, topic, compressed, full }) {
@@ -97,7 +192,7 @@ export async function generateAll({ url, topic, onProgress = () => {} }) {
     try {
       // 캡쳐 가이드는 카페 서머리의 "📷 캡쳐 n" 자리와 맞물려야 하므로, 앞서 생성된 카페 글을 넘긴다
       const prompt = spec.type === 'capture' ? buildCapturePrompt({ cafe: results.cafe }) : spec.prompt;
-      const content = await callClaude({
+      let content = await callClaude({
         model: spec.model,
         system: COMMON_HEADER,
         prompt,
@@ -105,6 +200,9 @@ export async function generateAll({ url, topic, onProgress = () => {} }) {
         maxTokens: spec.maxTokens || 8000,
         step: `${label} 생성`,
       });
+      if (spec.type === 'carousel') {
+        content = await finalizeCarousel({ content, job, voice, cafe: results.cafe, caption: results.caption, label });
+      }
       await saveContent(job.id, spec.type, content);
       results[spec.type] = content;
       console.log(`${label} 생성 완료 (${content.length}자)`);
@@ -120,16 +218,22 @@ export async function generateAll({ url, topic, onProgress = () => {} }) {
   return { jobId: job.id, results, failed };
 }
 
+const REVISABLE_TYPES = ['cafe', 'caption', 'carousel'];
+const REVISE_MODELS = { cafe: MODELS.CAFE, caption: MODELS.CAPTION, carousel: MODELS.CAROUSEL };
+
 /**
- * 개별 수정 재생성 — 카페 서머리('cafe') 또는 인스타 캡션('caption')만 가능.
+ * 개별 수정 재생성 — 카페 서머리('cafe') / 인스타 캡션('caption') / 캐러셀 기획('carousel').
  * 원본 내용 + 수정 지시 + 보이스 + 자막 기반으로 해당 섹션만 재생성 후 새 버전 저장.
+ * 캐러셀은 확정된 카페·캡션이 있으면 컨텍스트로 함께 넣어 메시지 일관성을 유지한다
+ * (대표 사용처: 1컷 후크를 A안→B안으로 바꿔 다시 기획).
+ * 캡쳐 가이드는 카페 글의 📷 자리 번호에 종속돼 있어 여기서 수정하지 않는다 — [캐러셀·캡쳐 재생성] 버튼 사용.
  *
  * @returns {Promise<{content: string, version: number}>}
  */
 export async function revise({ jobId, type, instruction }) {
   const step = '수정 재생성';
-  if (type !== 'cafe' && type !== 'caption') {
-    throw new Error(`${step}: 수정은 카페 서머리(cafe)와 인스타 캡션(caption)만 가능합니다 — 요청 타입: ${type}`);
+  if (!REVISABLE_TYPES.includes(type)) {
+    throw new Error(`${step}: 수정은 카페 서머리(cafe)·인스타 캡션(caption)·캐러셀 기획(carousel)만 가능합니다 — 요청 타입: ${type}`);
   }
   if (!instruction || !instruction.trim()) {
     throw new Error(`${step}: 수정 지시가 비어 있습니다.`);
@@ -143,16 +247,29 @@ export async function revise({ jobId, type, instruction }) {
 
   const voice = await loadVoice();
 
+  // 캐러셀 수정은 확정된 카페·캡션을 컨텍스트로 넣는다(없으면 자막만으로 진행).
+  let extra = {};
+  if (type === 'carousel') {
+    const [cafeRow, captionRow] = await Promise.all([
+      getLatestContent(jobId, 'cafe'),
+      getLatestContent(jobId, 'caption'),
+    ]);
+    extra = { topic: job.topic || undefined, cafe: cafeRow?.content, caption: captionRow?.content };
+  }
+
   const label = TYPE_LABELS[type];
   console.log(`${label} 수정 재생성 중... (지시: ${instruction.slice(0, 50)})`);
-  const content = await callClaude({
-    model: type === 'cafe' ? MODELS.CAFE : MODELS.CAPTION,
+  let content = await callClaude({
+    model: REVISE_MODELS[type],
     system: COMMON_HEADER,
-    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice }),
+    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, ...extra }),
     transcript: job.transcript_compressed,
-    maxTokens: 8000,
+    maxTokens: type === 'carousel' ? 16000 : 8000, // 캐러셀은 장면 지시서 형식이라 출력이 길다
     step: `${label} 수정`,
   });
+  if (type === 'carousel') {
+    content = await finalizeCarousel({ content, job, voice, cafe: extra.cafe, caption: extra.caption, label: `${label} 수정` });
+  }
 
   const row = await saveContent(jobId, type, content);
   console.log(`${label} 수정 완료 (버전 ${row.version})`);
@@ -181,13 +298,16 @@ export async function regenerateSecondary({ jobId }) {
   const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined };
 
   console.log('캐러셀 기획 재생성 중...');
-  const carousel = await callClaude({
+  let carousel = await callClaude({
     model: MODELS.CAROUSEL,
     system: COMMON_HEADER,
     prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice }),
     transcript: job.transcript_compressed,
     maxTokens: 16000,
     step: '캐러셀 기획 재생성',
+  });
+  carousel = await finalizeCarousel({
+    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, label: '캐러셀 기획 재생성',
   });
   await saveContent(jobId, 'carousel', carousel);
   console.log('캐러셀 기획 재생성 완료');

@@ -92,6 +92,18 @@
               <p class="loading-text">생성 중…</p>
             </div>
           </div>
+          <div class="revision-row revision-row--stack" id="revision-carousel" hidden>
+            <!-- 기획안의 [후크 후보] A안/B안/C안을 읽어 버튼으로 만든다. 채택안이 아닌 안을 누르면 그 안으로 1컷부터 재기획 -->
+            <div class="hook-picker" id="hooks-carousel" hidden>
+              <span class="hook-picker-label">1컷 후크 안 바꾸기</span>
+              <div class="hook-chips" id="hook-chips-carousel"></div>
+            </div>
+            <div class="revision-input-row">
+              <input type="text" id="revise-carousel" class="input-revise"
+                placeholder="수정 요청 (예: B안으로 다시 기획 / 7컷 헤드카피 더 짧게)" />
+              <button class="btn btn-revise" data-type="carousel" disabled>재생성</button>
+            </div>
+          </div>
         </article>
 
         <!-- 캡쳐 가이드 -->
