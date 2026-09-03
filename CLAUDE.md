@@ -36,7 +36,7 @@
 
 ## 모델 선택
 - caption, cafe_summary → `claude-opus-4-8` (말투 중요).
-- capture_guide, carousel_plan → `claude-sonnet-4-6` (구조 위주, 비용 절감).
+- capture_guide, carousel_plan → `claude-opus-4-8` (2026-09-04부터. 기획 품질 우선으로 sonnet에서 올림. 4종이 같은 모델이라 자막 프롬프트 캐시가 전부 재사용된다).
 - 한국어 출력이 기니 `max_tokens`는 4000 이상.
 
 ## 코딩 컨벤션

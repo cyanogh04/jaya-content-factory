@@ -10,13 +10,14 @@ const API_URL = 'https://api.anthropic.com/v1/messages';
 const API_VERSION = '2023-06-01';
 
 // 모델 선택 (CLAUDE.md 기준):
-//   말투가 중요한 섹션(cafe, caption, voice) → opus / 구조 위주(carousel, capture) → sonnet
+//   4종 모두 claude-opus-4-8. (2026-09-04 캐러셀·캡쳐도 sonnet-4-6 → opus-4-8로 올림 — 기획 품질 우선.
+//   모델이 하나라 자막 캐시 블록이 4종 호출 전부에서 재사용된다.)
 export const MODELS = {
   VOICE: 'claude-opus-4-8',
   CAFE: 'claude-opus-4-8',
   CAPTION: 'claude-opus-4-8',
-  CAROUSEL: 'claude-sonnet-4-6',
-  CAPTURE: 'claude-sonnet-4-6',
+  CAROUSEL: 'claude-opus-4-8',
+  CAPTURE: 'claude-opus-4-8',
 };
 
 /**
