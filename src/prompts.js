@@ -664,11 +664,27 @@ ${topicLine(topic)}`;
 // ─────────────────────────────────────────────
 // 수정(revise) — 카페 서머리 / 인스타 캡션 / 캐러셀 기획
 // ─────────────────────────────────────────────
-export function buildRevisePrompt({ type, original, instruction, voice, topic, cafe, caption }) {
+export function buildRevisePrompt({ type, original, instruction, voice, topic, cafe, caption, carousel }) {
   if (type === 'carousel') {
     return buildCarouselRevisePrompt({ original, instruction, voice, topic, cafe, caption });
   }
   const label = TYPE_LABELS[type];
+  // 캡션 수정에 짝꿍 캐러셀 기획안이 딸려 오면(후크 안 교체 뒤 캡션 맞추기) — 같은 게시물의 카드와 결을 맞춘다
+  const pairBlock =
+    type === 'caption' && carousel
+      ? `
+[짝꿍 캐러셀 기획안 — 이 캡션과 같은 게시물에 실리는 카드. 캡션은 이 카드에 이미 반응해 내려온 사람을 받는다]
+${carousel}
+
+[캐러셀과 결 맞추기]
+- 캡션의 첫 두 줄('…더 보기' 전)은 위 기획안의 후크 **채택안**과 같은 갈래·같은 감정으로 쓴다.
+  공감형이면 "어? 이거 내 얘기잖아"(반가운 뜨끔), 참여유도형이면 "이거 나도 만들고 싶다"(부러움+희망)로 끝나야 한다.
+- 채택 헤드카피를 그대로 베끼지 않는다. 같은 장면·같은 감정을 캡션 호흡(긴 서사의 첫 문장)으로 다시 쓴다.
+- 첫 두 줄이 바뀌면 바로 이어지는 공감 확장 문단도 그 첫 줄에서 자연스럽게 흘러나오게 손본다.
+- 카드가 이미 보여주는 것(대상 목록·커리큘럼 목록)은 캡션에서 되풀이하지 않는다.
+- 캐러셀의 핵심 메시지·열린 고리와 캡션의 결과 약속이 서로 어긋나지 않게 한다.
+`
+      : '';
   const rules =
     type === 'cafe'
       ? '**글자수는 1,800~2,200자(공백 포함)**를 유지한다. 첫 줄은 게시글 제목이고, 화자는 카페 매니저 디바(자야쌤은 3인칭)라는 점을 유지한다.\n' +
@@ -681,7 +697,7 @@ export function buildRevisePrompt({ type, original, instruction, voice, topic, c
   return `${voiceBlock(voice)}
 ${styleBlock}
 ${BRAND_GOAL}
-
+${pairBlock}
 [티저 원칙 유지] 수정 후에도 아래 [노출 수위]·[검색 노출] 기준을 유지한다. 독자가 수강 욕구를 느끼도록 진단은 선명하게, 처방은 강의에 남기는 방향을 지킨다.
 
 ${DISCLOSURE_RULE}

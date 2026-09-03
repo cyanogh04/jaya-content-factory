@@ -196,6 +196,25 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
 }
 
 /**
+ * 캐러셀 기획안 개요에서 채택된 후크 안을 읽는다 — { key: 'A'|'B'|'C', kind: '공감형'|'참여유도형', head }.
+ * (프론트 parseHookCandidates와 같은 표기 규약: "· A안 [공감형] 헤드카피 → 근거" / "· 채택: A안 → 이유")
+ * 후크 안이 실제로 바뀌었는지 판단해 캡션을 따라 고칠지 정하는 데 쓴다.
+ */
+function adoptedHook(planText) {
+  if (!planText) return null;
+  const cutIdx = planText.search(/^##\s*CUT\s*\d+/m);
+  const overview = cutIdx > 0 ? planText.slice(0, cutIdx) : planText;
+  const adoptM = overview.match(/^\s*[·•\-*]?\s*\**채택\**\s*[:：]?\s*\**\s*([ABC])안/m);
+  if (!adoptM) return null;
+  const key = adoptM[1];
+  const candRe = new RegExp(`^\\s*[·•\\-*]?\\s*\\**${key}안\\**\\s*[\\[［(（]\\s*(공감형|참여유도형)\\s*[\\]］)）]\\s*[:：]?\\s*(.+)$`, 'm');
+  const candM = overview.match(candRe);
+  if (!candM) return { key, kind: null, head: null };
+  const head = candM[2].split(/\s*(?:→|—|\||--)\s*/)[0].replace(/\*\*/g, '').replace(/^["“「『']+|["”」』']+$/g, '').trim();
+  return { key, kind: candM[1], head };
+}
+
+/**
  * 캡쳐 가이드가 따라가는 카페 글의 "📷 캡쳐 n [MM:SS] …" 자리표시 줄만 뽑는다.
  * 카페 수정 전후로 이 줄들이 달라졌으면 캡쳐 가이드도 다시 만들어야 한다.
  */
@@ -279,9 +298,11 @@ const REVISE_MODELS = { cafe: MODELS.CAFE, caption: MODELS.CAPTION, carousel: MO
  * (대표 사용처: 1컷 후크를 A안→B안으로 바꿔 다시 기획).
  * 캡쳐 가이드는 카페 글의 📷 자리 번호에 종속돼 있어 여기서 수정하지 않는다 — [캐러셀·캡쳐 재생성] 버튼 사용.
  *
- * @returns {Promise<{content: string, version: number}>}
+ * 캐러셀 수정으로 후크 채택안이 바뀌면(alignCaption=true일 때) 짝꿍인 인스타 캡션의 첫 두 줄도 같은 갈래로 따라 고쳐 함께 돌려준다.
+ *
+ * @returns {Promise<{content: string, version: number, capture?: string|null, caption?: string|null}>}
  */
-export async function revise({ jobId, type, instruction }) {
+export async function revise({ jobId, type, instruction, alignCaption = true }) {
   const step = '수정 재생성';
   if (!REVISABLE_TYPES.includes(type)) {
     throw new Error(`${step}: 수정은 카페 서머리(cafe)·인스타 캡션(caption)·캐러셀 기획(carousel)만 가능합니다 — 요청 타입: ${type}`);
@@ -346,7 +367,48 @@ export async function revise({ jobId, type, instruction }) {
       return { content, version: row.version, capture: null, captureError: err.message };
     }
   }
-  return { content, version: row.version, capture };
+
+  // 캐러셀 후크 채택안이 바뀌었으면 짝꿍 캡션의 첫 두 줄도 같은 갈래로 맞춘다 (사용자가 끄면 건너뜀)
+  let captionOut = null;
+  let captionError = null;
+  let hookChanged = false;
+  if (type === 'carousel' && alignCaption) {
+    const before = adoptedHook(latest.content);
+    const after = adoptedHook(content);
+    hookChanged = !!after && (!before || before.key !== after.key || (after.head && before.head !== after.head));
+    const captionRow = hookChanged ? await getLatestContent(jobId, 'caption') : null;
+    if (hookChanged && captionRow) {
+      const hookDesc = `${after.key}안(${after.kind || '갈래 미표기'})${after.head ? ` "${after.head}"` : ''}`;
+      console.log(`캐러셀 후크가 ${hookDesc}로 바뀜 → 인스타 캡션 결 맞추기 중...`);
+      try {
+        const alignInstruction =
+          `짝꿍 캐러셀의 1컷 후크가 ${hookDesc}로 바뀌었다. 캡션의 첫 두 줄('…더 보기' 전)을 이 안과 같은 갈래·같은 감정으로 다시 쓰고, ` +
+          `바로 이어지는 공감 확장 문단이 그 첫 줄에서 자연스럽게 흘러나오게 손본다. ` +
+          `진단·자야쌤의 근거·대상 지목·망설임 해소·손실 회피·CTA는 내용을 유지하되, 새 첫 줄과 어긋나는 문장만 고친다. ` +
+          `채택 헤드카피를 그대로 베끼지 않는다.`;
+        captionOut = await callClaude({
+          model: MODELS.CAPTION,
+          system: COMMON_HEADER,
+          prompt: buildRevisePrompt({
+            type: 'caption',
+            original: captionRow.content,
+            instruction: alignInstruction,
+            voice,
+            carousel: content,
+          }),
+          transcript: job.transcript_compressed,
+          maxTokens: 8000,
+          step: '인스타 캡션 결 맞추기',
+        });
+        await saveContent(jobId, 'caption', captionOut);
+        console.log('인스타 캡션 결 맞추기 완료');
+      } catch (err) {
+        console.error(`인스타 캡션 결 맞추기 실패: ${err.message}`);
+        captionError = err.message;
+      }
+    }
+  }
+  return { content, version: row.version, capture, caption: captionOut, captionError, hookChanged };
 }
 
 /**

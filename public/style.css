@@ -471,6 +471,16 @@ input[type="text"]:focus {
   white-space: nowrap;
 }
 .hook-chip.is-current .hook-chip-tag { color: var(--success); font-weight: 600; }
+.hook-align {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .82rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.hook-align input { accent-color: var(--navy); width: 15px; height: 15px; margin: 0; }
 
 /* ─── 재생성 버튼 행 ────────────────────────────────────── */
 .regen-row {

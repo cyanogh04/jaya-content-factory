@@ -112,7 +112,7 @@
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | POST | `/api/generate` | URL 입력 → 자막 수집 + 4종 순차 생성 (SSE) |
-| POST | `/api/revise` | 특정 섹션 수정 재생성 (cafe·caption·carousel). cafe 수정으로 📷 캡쳐 자리가 바뀌면 캡쳐 가이드도 함께 갱신해 `capture`로 돌려준다 |
+| POST | `/api/revise` | 특정 섹션 수정 재생성 (cafe·caption·carousel). cafe 수정으로 📷 캡쳐 자리가 바뀌면 캡쳐 가이드도 함께 갱신해 `capture`로 돌려준다. carousel 수정으로 후크 채택안이 바뀌면(`alignCaption`, 기본 true) 짝꿍 캡션 첫 두 줄도 같은 갈래로 고쳐 `caption`으로 돌려준다 |
 | POST | `/api/regenerate-all` | (SSE) 전체 기획 다시하기 — `{ jobId, concept }`. 컨셉이 통째로 어긋났을 때 저장된 자막으로 4종을 컨셉 기준으로 재생성 |
 | POST | `/api/regenerate` | 캐러셀·캡쳐 가이드 재생성 |
 | POST | `/api/learn-voice` | 보이스 프로파일 갱신 (관리자) |

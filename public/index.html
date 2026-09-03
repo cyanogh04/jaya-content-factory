@@ -42,6 +42,8 @@
     <main id="results" hidden>
       <div class="sections-grid">
 
+        <!-- 배치: 1행 카페 서머리 | 캡쳐 가이드(카페 📷 자리와 짝), 2행 캐러셀 기획 | 인스타 캡션(같은 게시물의 짝).
+             생성 순서(cafe→caption→carousel→capture)와 무관하게 복사해 쓰기 편한 짝으로 놓는다. -->
         <!-- 카페 서머리 -->
         <article class="content-card" id="card-cafe" data-type="cafe">
           <div class="card-header">
@@ -62,23 +64,17 @@
           </div>
         </article>
 
-        <!-- 인스타 캡션 -->
-        <article class="content-card" id="card-caption" data-type="caption">
+        <!-- 캡쳐 가이드 -->
+        <article class="content-card" id="card-capture" data-type="capture">
           <div class="card-header">
-            <span class="card-title">인스타 캡션</span>
-            <span class="char-count" id="count-caption"></span>
-            <button class="btn btn-copy" data-target="caption" disabled>복사</button>
+            <span class="card-title">캡쳐 가이드</span>
+            <button class="btn btn-copy" data-target="capture" disabled>복사</button>
           </div>
-          <div class="card-body" id="body-caption">
+          <div class="card-body" id="body-capture">
             <div class="skeleton-wrap">
               <div class="spinner"></div>
               <p class="loading-text">생성 중…</p>
             </div>
-          </div>
-          <div class="revision-row" id="revision-caption" hidden>
-            <input type="text" id="revise-caption" class="input-revise"
-              placeholder="수정 요청 (예: CTA 부분 다시)" />
-            <button class="btn btn-revise" data-type="caption" disabled>재생성</button>
           </div>
         </article>
 
@@ -99,6 +95,11 @@
             <div class="hook-picker" id="hooks-carousel" hidden>
               <span class="hook-picker-label">1컷 후크 안 바꾸기</span>
               <div class="hook-chips" id="hook-chips-carousel"></div>
+              <!-- 캐러셀과 캡션은 같은 게시물의 짝 — 안이 바뀌면 캡션 첫 두 줄도 같은 갈래로 따라간다 -->
+              <label class="hook-align">
+                <input type="checkbox" id="align-caption" checked />
+                <span>짝꿍 인스타 캡션도 선택한 안에 맞춰 첫 줄부터 수정</span>
+              </label>
             </div>
             <div class="revision-input-row">
               <input type="text" id="revise-carousel" class="input-revise"
@@ -108,17 +109,23 @@
           </div>
         </article>
 
-        <!-- 캡쳐 가이드 -->
-        <article class="content-card" id="card-capture" data-type="capture">
+        <!-- 인스타 캡션 -->
+        <article class="content-card" id="card-caption" data-type="caption">
           <div class="card-header">
-            <span class="card-title">캡쳐 가이드</span>
-            <button class="btn btn-copy" data-target="capture" disabled>복사</button>
+            <span class="card-title">인스타 캡션</span>
+            <span class="char-count" id="count-caption"></span>
+            <button class="btn btn-copy" data-target="caption" disabled>복사</button>
           </div>
-          <div class="card-body" id="body-capture">
+          <div class="card-body" id="body-caption">
             <div class="skeleton-wrap">
               <div class="spinner"></div>
               <p class="loading-text">생성 중…</p>
             </div>
+          </div>
+          <div class="revision-row" id="revision-caption" hidden>
+            <input type="text" id="revise-caption" class="input-revise"
+              placeholder="수정 요청 (예: CTA 부분 다시)" />
+            <button class="btn btn-revise" data-type="caption" disabled>재생성</button>
           </div>
         </article>
 

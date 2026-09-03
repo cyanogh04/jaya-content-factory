@@ -410,12 +410,28 @@ async function handleRevise(type, instructionOverride, doneMessage) {
   const previousCapture = type === 'cafe' ? sectionContent.capture : null;
   if (type === 'cafe' && previousCapture) setCardLoading('capture', '카페 수정 반영 확인 중…');
 
+  // 캐러셀 후크 안이 바뀌면 짝꿍 캡션 첫 두 줄도 따라간다(체크박스로 끌 수 있음) — 그동안 캡션 카드에 표시
+  const alignEl = $('align-caption');
+  const alignCaption = type === 'carousel' ? (alignEl ? alignEl.checked : true) : undefined;
+  const previousCaption = type === 'carousel' && alignCaption ? sectionContent.caption : null;
+  if (previousCaption) setCardLoading('caption', '캐러셀 채택안에 맞춰 확인 중…');
+
   try {
-    const data = await apiFetch('POST', '/api/revise', { jobId: currentJobId, type, instruction });
+    const data = await apiFetch('POST', '/api/revise', { jobId: currentJobId, type, instruction, alignCaption });
     setCardContent(type, data.content);
     $(`revise-${type}`).value = '';
 
-    if (type === 'cafe') {
+    if (type === 'carousel') {
+      if (data.caption) {
+        setCardContent('caption', data.caption);
+        showToast(`${doneMessage || '캐러셀 수정 완료'} · 인스타 캡션 첫 줄도 선택한 안에 맞췄습니다`);
+      } else {
+        if (previousCaption) setCardContent('caption', previousCaption);
+        if (data.captionError) showToast(`캐러셀 수정 완료 · 캡션 맞추기는 실패했습니다: ${data.captionError}`);
+        else if (data.hookChanged) showToast(`${doneMessage || '캐러셀 수정 완료'} (캡션은 없어서 맞추지 않았습니다)`);
+        else showToast(doneMessage || '수정 완료 (후크 안은 그대로라 캡션 유지)');
+      }
+    } else if (type === 'cafe') {
       if (data.capture) {
         setCardContent('capture', data.capture);
         showToast('카페 서머리 수정 완료 · 캡쳐 자리가 바뀌어 캡쳐 가이드도 새로 맞췄습니다');
@@ -436,6 +452,7 @@ async function handleRevise(type, instructionOverride, doneMessage) {
       setCardError(type, err.message);
     }
     if (previousCapture) setCardContent('capture', previousCapture);
+    if (previousCaption) setCardContent('caption', previousCaption);
   } finally {
     reviseBtn.disabled = false;
     reviseBtn.textContent = '재생성';

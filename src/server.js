@@ -133,13 +133,26 @@ app.post('/api/regenerate-all', async (req, res) => {
 // ───────────────────────── POST /api/revise ─────────────────────────
 
 app.post('/api/revise', async (req, res) => {
-  const { jobId, type, instruction } = req.body || {};
+  const { jobId, type, instruction, alignCaption } = req.body || {};
   if (!jobId || !type || !instruction) {
     return res.status(400).json({ error: '수정 요청: jobId, type, instruction이 모두 필요합니다.' });
   }
   try {
-    const { content, version, capture, captureError } = await revise({ jobId, type, instruction });
-    res.json({ content, version, capture: capture || null, captureError: captureError || null });
+    const { content, version, capture, captureError, caption, captionError, hookChanged } = await revise({
+      jobId,
+      type,
+      instruction,
+      alignCaption: alignCaption !== false, // 기본 켬 — 캐러셀 후크 안이 바뀌면 캡션 첫 두 줄도 따라 맞춤
+    });
+    res.json({
+      content,
+      version,
+      capture: capture || null,
+      captureError: captureError || null,
+      caption: caption || null,
+      captionError: captionError || null,
+      hookChanged: !!hookChanged,
+    });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: err.message });
