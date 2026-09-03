@@ -7,6 +7,10 @@
 let currentJobId = null;
 const sectionContent = { cafe: null, caption: null, carousel: null, capture: null };
 const TYPES = ['cafe', 'caption', 'carousel', 'capture'];
+// 저장된 버전 이력 — 한 번 기획한 A안/B안 등은 토큰을 다시 쓰지 않고 오가며 비교한다
+// versions[type] = [{ version, content, created_at }] (오름차순), viewing[type] = 지금 카드에 띄운 버전 번호
+const versions = { cafe: [], caption: [], carousel: [], capture: [] };
+const viewing = { cafe: null, caption: null, carousel: null, capture: null };
 
 // ─── DOM 참조 ─────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -79,6 +83,14 @@ function bindEvents() {
   // 수정 요청 버튼
   document.querySelectorAll('.btn-revise').forEach((btn) => {
     btn.addEventListener('click', () => handleRevise(btn.dataset.type));
+  });
+
+  // 저장된 버전 오가기 / 확정
+  TYPES.forEach((type) => {
+    $(`version-${type}`).addEventListener('change', (e) => selectVersion(type, Number(e.target.value)));
+  });
+  document.querySelectorAll('.btn-confirm-version').forEach((btn) => {
+    btn.addEventListener('click', () => confirmVersion(btn.dataset.type));
   });
 
   // 수정 입력창 Enter
@@ -178,14 +190,13 @@ async function openJob(jobId, itemEl) {
     currentJobId = jobId;
     TYPES.forEach((t) => { sectionContent[t] = null; });
 
+    setVersions(data.contents || []);
     TYPES.forEach((type) => {
-      const rows = (data.contents || []).filter((c) => c.type === type);
-      if (rows.length === 0) {
+      if (versions[type].length === 0) {
         setCardEmpty(type);
         return;
       }
-      const latest = rows.reduce((a, b) => (a.version >= b.version ? a : b));
-      setCardContent(type, latest.content);
+      showLatestVersion(type);
     });
 
     if (sectionContent['cafe'] && sectionContent['caption']) {
@@ -299,6 +310,7 @@ function handleSSEEvent(event, data) {
       $saveNotionBtn.disabled = !TYPES.every((t) => sectionContent[t]);
     }
     showConceptRow(); // 결과가 나왔으니 '전체 기획 다시하기'를 열어 둔다
+    refreshVersions(); // 버전 선택 목록 갱신
     loadHistory(); // 방금 만든 작업이 히스토리에 바로 보이도록 갱신
   } else if (event === 'error') {
     TYPES.forEach((t) => { if (!sectionContent[t]) setCardError(t, data.error); });
@@ -366,6 +378,11 @@ function setCardEmpty(type) {
   sectionContent[type] = null;
   const body = $(`body-${type}`);
   body.innerHTML = '<p class="empty-msg">이 작업에서는 생성되지 않은 섹션입니다.</p>';
+  viewing[type] = null;
+  const sel = $(`version-${type}`);
+  if (sel) sel.setAttribute('hidden', '');
+  const confirmBtn = document.querySelector(`.btn-confirm-version[data-type="${type}"]`);
+  if (confirmBtn) confirmBtn.setAttribute('hidden', '');
   const card = $(`card-${type}`);
   card.classList.remove('is-done', 'is-error');
   card.querySelector('.btn-copy').disabled = true;
@@ -456,7 +473,174 @@ async function handleRevise(type, instructionOverride, doneMessage) {
   } finally {
     reviseBtn.disabled = false;
     reviseBtn.textContent = '재생성';
+    refreshVersions(); // 새 버전(과 따라 바뀐 캡션·캡쳐 버전)을 목록에 반영
   }
+}
+
+// ─── 저장된 버전 오가기 ─────────────────────────────────────
+// 모든 생성·수정 결과는 서버에 버전으로 남는다. 화면은 최신만 보여주지 말고,
+// 이미 기획한 A안·B안 등을 토큰 없이 불러와 비교하고 "이 버전으로 확정"할 수 있게 한다.
+
+/** /api/job 응답의 contents → versions 상태로 정리 */
+function setVersions(contents) {
+  TYPES.forEach((type) => {
+    versions[type] = contents
+      .filter((c) => c.type === type)
+      .map((c) => ({ version: c.version, content: c.content, created_at: c.created_at }))
+      .sort((a, b) => a.version - b.version);
+  });
+}
+
+/** 서버에서 이력을 다시 읽어 선택 목록을 갱신 (지금 보는 버전은 유지) */
+async function refreshVersions() {
+  if (!currentJobId) return;
+  try {
+    const data = await apiFetch('GET', `/api/job/${currentJobId}`);
+    setVersions(data.contents || []);
+    TYPES.forEach((type) => {
+      if (!sectionContent[type]) return;
+      // 지금 카드에 떠 있는 내용과 같은 버전을 찾아 viewing을 맞춘다 (없으면 최신)
+      const match = [...versions[type]].reverse().find((v) => v.content === sectionContent[type]);
+      viewing[type] = match ? match.version : latestVersionOf(type);
+      renderVersionSelect(type);
+    });
+  } catch {
+    /* 목록 갱신 실패는 조용히 — 카드 내용에는 영향 없음 */
+  }
+}
+
+function latestVersionOf(type) {
+  const list = versions[type];
+  return list.length ? list[list.length - 1].version : null;
+}
+
+function showLatestVersion(type) {
+  const v = latestVersionOf(type);
+  if (v == null) return;
+  selectVersion(type, v);
+}
+
+/** 버전 라벨 — 캐러셀은 채택된 후크 안, 나머지는 시각 */
+function versionLabel(type, row) {
+  const t = row.created_at ? new Date(row.created_at) : null;
+  const time = t && !isNaN(t) ? ` · ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}` : '';
+  let desc = '';
+  if (type === 'carousel') {
+    const parsed = parseHookCandidates(row.content);
+    if (parsed && parsed.adopted) {
+      const c = parsed.cands.find((x) => x.key === parsed.adopted);
+      desc = ` · ${parsed.adopted}안${c ? ` ${c.kind}` : ''}`;
+    }
+  } else if (type === 'caption') {
+    const pairedCarousel = carouselVersionPairedWithCaption(row);
+    if (pairedCarousel) desc = ` · 캐러셀 ${pairedCarousel}`;
+  }
+  return `v${row.version}${desc}${time}`;
+}
+
+function renderVersionSelect(type) {
+  const sel = $(`version-${type}`);
+  const confirmBtn = document.querySelector(`.btn-confirm-version[data-type="${type}"]`);
+  if (!sel) return;
+  const list = versions[type];
+  if (list.length <= 1) {
+    sel.setAttribute('hidden', '');
+    if (confirmBtn) confirmBtn.setAttribute('hidden', '');
+    return;
+  }
+  const latest = latestVersionOf(type);
+  sel.innerHTML = '';
+  [...list].reverse().forEach((row) => {
+    const opt = document.createElement('option');
+    opt.value = String(row.version);
+    opt.textContent = versionLabel(type, row) + (row.version === latest ? ' (최신)' : '');
+    if (row.version === viewing[type]) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.removeAttribute('hidden');
+  const isOld = viewing[type] != null && viewing[type] !== latest;
+  sel.classList.toggle('is-old', isOld);
+  if (confirmBtn) confirmBtn.toggleAttribute('hidden', !isOld);
+  // 옛 버전을 보는 동안은 수정 요청 입력을 막는다 — 서버의 수정은 항상 최신 버전을 기준으로 하기 때문.
+  // 캐러셀은 후크 안 버튼(저장된 안 오가기)은 남기고 입력 행만 숨긴다 — 비교하는 중에 다른 안으로 넘어갈 수 있어야 한다.
+  const revRow = $(`revision-${type}`);
+  if (revRow && sectionContent[type]) {
+    const inputRow = revRow.querySelector('.revision-input-row');
+    if (inputRow) {
+      revRow.removeAttribute('hidden');
+      inputRow.toggleAttribute('hidden', isOld);
+    } else {
+      revRow.toggleAttribute('hidden', isOld);
+    }
+  }
+}
+
+/** 저장된 버전을 카드에 띄운다 (모델 호출 없음) */
+function selectVersion(type, version) {
+  const row = versions[type].find((v) => v.version === version);
+  if (!row) return;
+  viewing[type] = version;
+  setCardContent(type, row.content);
+  renderVersionSelect(type);
+}
+
+/** 지금 보는 버전을 최신으로 되살린다 (내용 복사 저장, 토큰 0). 캐러셀이면 함께 보던 옛 캡션도 같이 확정 */
+async function confirmVersion(type) {
+  if (!currentJobId || viewing[type] == null) return;
+  const targets = [{ type, version: viewing[type] }];
+  if (type === 'carousel' && viewing.caption != null && viewing.caption !== latestVersionOf('caption')) {
+    targets.push({ type: 'caption', version: viewing.caption });
+  }
+  const btn = document.querySelector(`.btn-confirm-version[data-type="${type}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '확정 중…'; }
+  try {
+    for (const t of targets) {
+      await apiFetch('POST', '/api/content/restore', { jobId: currentJobId, type: t.type, version: t.version });
+    }
+    await refreshVersions();
+    targets.forEach((t) => showLatestVersion(t.type));
+    const names = targets.map((t) => `${CARD_NAMES[t.type]} v${t.version}`).join(', ');
+    showToast(`${names}을(를) 최신 버전으로 확정했습니다 (토큰 사용 없음)`);
+  } catch (err) {
+    showToast(`⚠️ 버전 확정 실패: ${err.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '이 버전으로 확정'; }
+  }
+}
+
+const CARD_NAMES = { cafe: '카페 서머리', caption: '인스타 캡션', carousel: '캐러셀 기획', capture: '캡쳐 가이드' };
+
+/** 후크 안(A/B/C)이 채택된 가장 최근 저장 버전 — 없으면 null */
+function savedCarouselVersionForHook(key) {
+  for (const row of [...versions.carousel].reverse()) {
+    const parsed = parseHookCandidates(row.content);
+    if (parsed && parsed.adopted === key) return row;
+  }
+  return null;
+}
+
+/** 캐러셀 버전 V가 최신이던 시기에 함께 쓰이던 캡션 버전 (그 다음 캐러셀 버전이 생기기 전까지의 마지막 캡션) */
+function pairedCaptionVersion(carouselVersion) {
+  const list = versions.carousel;
+  const idx = list.findIndex((v) => v.version === carouselVersion);
+  if (idx < 0) return null;
+  const next = list[idx + 1];
+  const cutoff = next && next.created_at ? new Date(next.created_at).getTime() : Infinity;
+  const candidates = versions.caption.filter((c) => {
+    const t = c.created_at ? new Date(c.created_at).getTime() : 0;
+    return t < cutoff;
+  });
+  return candidates.length ? candidates[candidates.length - 1] : null;
+}
+
+/** 캡션 버전 라벨용 — 이 캡션이 생길 때 최신이던 캐러셀의 채택안 */
+function carouselVersionPairedWithCaption(captionRow) {
+  const t = captionRow.created_at ? new Date(captionRow.created_at).getTime() : 0;
+  const before = versions.carousel.filter((v) => (v.created_at ? new Date(v.created_at).getTime() : 0) <= t);
+  const car = before.length ? before[before.length - 1] : null;
+  if (!car) return null;
+  const parsed = parseHookCandidates(car.content);
+  return parsed && parsed.adopted ? `${parsed.adopted}안` : `v${car.version}`;
 }
 
 // ─── 캐러셀 후크 안 선택 ──────────────────────────────────
@@ -519,12 +703,27 @@ function renderHookPicker(content) {
     const headEl = document.createElement('span');
     headEl.className = 'hook-chip-head';
     headEl.textContent = head;
+    // 이미 이 안으로 기획해 둔 버전이 있으면 토큰 없이 불러온다. 없을 때만 새로 기획한다.
+    const saved = isCurrent ? null : savedCarouselVersionForHook(key);
     const tagEl = document.createElement('span');
     tagEl.className = 'hook-chip-tag';
-    tagEl.textContent = isCurrent ? '현재 채택' : '이 안으로 다시 기획 →';
+    tagEl.textContent = isCurrent ? '현재 채택' : (saved ? `저장된 기획 보기 (v${saved.version})` : '이 안으로 다시 기획 →');
+    if (saved) btn.title = `${key}안으로 이미 기획한 v${saved.version}을 불러옵니다 (토큰 사용 없음). 새로 기획하려면 아래 입력창에 "${key}안으로 다시 기획"이라고 적으세요.`;
     btn.append(keyEl, headEl, tagEl);
 
-    if (!isCurrent) {
+    if (!isCurrent && saved) {
+      btn.addEventListener('click', () => {
+        selectVersion('carousel', saved.version);
+        const pairedCap = pairedCaptionVersion(saved.version);
+        if (pairedCap && pairedCap.version !== viewing.caption) selectVersion('caption', pairedCap.version);
+        const isLatest = saved.version === latestVersionOf('carousel');
+        showToast(
+          `${key}안(${kind})으로 기획해 둔 v${saved.version}을 불러왔습니다` +
+          (pairedCap ? ` · 그때의 캡션 v${pairedCap.version}도 함께` : '') +
+          (isLatest ? '' : ' — 이 안으로 갈 거면 "이 버전으로 확정"을 누르세요 (토큰 사용 없음)')
+        );
+      });
+    } else if (!isCurrent) {
       btn.addEventListener('click', () => {
         const instruction =
           `후크 후보 ${key}안(${kind}) "${head}"을 채택안으로 바꿔 CUT 1부터 다시 기획한다. ` +
@@ -607,6 +806,7 @@ async function handleRegenSecondary() {
     setCardContent('capture', data.capture);
     $saveNotionBtn.disabled = !TYPES.every((t) => sectionContent[t]);
     showToast('캐러셀·캡쳐 가이드 재생성 완료');
+    refreshVersions();
   } catch (err) {
     setCardError('carousel', err.message);
     setCardError('capture', err.message);

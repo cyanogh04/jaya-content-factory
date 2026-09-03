@@ -18,7 +18,7 @@ import { generateAll, regenerateAll, revise, regenerateSecondary } from './gener
 import { learn as learnVoice } from './voice.js';
 import { exchangeToLongLived, autoRefreshIfNeeded } from './instagram.js';
 import { saveLectureToNotion } from './notion.js';
-import { getJob, getContents, getLatestContent, getVoiceProfile, isSupabase, listJobs } from './db.js';
+import { getJob, getContents, getLatestContent, getVoiceProfile, isSupabase, listJobs, saveContent } from './db.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
@@ -303,6 +303,34 @@ app.get('/api/jobs', async (req, res) => {
   try {
     const jobs = await listJobs();
     res.json({ jobs });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ───────────────────────── POST /api/content/restore ─────────────────────────
+// 저장된 이전 버전을 최신으로 되살린다 — 내용을 그대로 복사해 새 버전으로 저장 (모델 호출 없음, 토큰 0).
+// 화면에서 A안·B안 등 이미 기획한 버전을 비교한 뒤 "이 버전으로 확정"할 때 쓴다.
+// 이후 수정·재생성·노션 저장은 모두 최신 버전을 기준으로 하므로, 되살려 두어야 그 버전이 기준이 된다.
+
+app.post('/api/content/restore', async (req, res) => {
+  const { jobId, type, version } = req.body || {};
+  if (!jobId || !type || !Number.isInteger(version)) {
+    return res.status(400).json({ error: '버전 확정: jobId, type, version(정수)이 모두 필요합니다.' });
+  }
+  try {
+    const all = await getContents(jobId);
+    const rows = all.filter((c) => c.type === type);
+    const target = rows.find((c) => c.version === version);
+    if (!target) return res.status(404).json({ error: `버전 확정: ${type} v${version}을 찾을 수 없습니다.` });
+    const latest = rows.reduce((a, b) => (a.version >= b.version ? a : b));
+    if (latest.version === version) {
+      return res.json({ content: latest.content, version: latest.version, restored: false }); // 이미 최신
+    }
+    const row = await saveContent(jobId, type, target.content);
+    console.log(`${type} v${version} → v${row.version}으로 되살림 (모델 호출 없음)`);
+    res.json({ content: row.content, version: row.version, restored: true, from: version });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: err.message });

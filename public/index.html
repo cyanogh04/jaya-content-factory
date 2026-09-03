@@ -49,6 +49,8 @@
           <div class="card-header">
             <span class="card-title">네이버 카페 서머리</span>
             <span class="char-count" id="count-cafe"></span>
+            <select id="version-cafe" class="version-select" title="저장된 버전 보기 (토큰 사용 없음)" hidden></select>
+            <button class="btn btn-confirm-version" data-type="cafe" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
             <button class="btn btn-copy" data-target="cafe" disabled>복사</button>
           </div>
           <div class="card-body" id="body-cafe">
@@ -68,6 +70,8 @@
         <article class="content-card" id="card-capture" data-type="capture">
           <div class="card-header">
             <span class="card-title">캡쳐 가이드</span>
+            <select id="version-capture" class="version-select" title="저장된 버전 보기 (토큰 사용 없음)" hidden></select>
+            <button class="btn btn-confirm-version" data-type="capture" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
             <button class="btn btn-copy" data-target="capture" disabled>복사</button>
           </div>
           <div class="card-body" id="body-capture">
@@ -82,6 +86,8 @@
         <article class="content-card" id="card-carousel" data-type="carousel">
           <div class="card-header">
             <span class="card-title">인스타 캐러셀 기획</span>
+            <select id="version-carousel" class="version-select" title="저장된 버전 보기 (토큰 사용 없음)" hidden></select>
+            <button class="btn btn-confirm-version" data-type="carousel" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
             <button class="btn btn-copy" data-target="carousel" disabled>복사</button>
           </div>
           <div class="card-body" id="body-carousel">
@@ -114,6 +120,8 @@
           <div class="card-header">
             <span class="card-title">인스타 캡션</span>
             <span class="char-count" id="count-caption"></span>
+            <select id="version-caption" class="version-select" title="저장된 버전 보기 (토큰 사용 없음)" hidden></select>
+            <button class="btn btn-confirm-version" data-type="caption" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
             <button class="btn btn-copy" data-target="caption" disabled>복사</button>
           </div>
           <div class="card-body" id="body-caption">
