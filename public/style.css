@@ -342,6 +342,20 @@ input[type="text"]:focus {
   flex: 1;
   padding: 16px 20px;
   min-height: 120px;
+  /* 카페·캐러셀처럼 긴 글은 카드 안에서 스크롤한다 — 좌우 카드 높이를 맞춰 옆 카드(캡쳐·캡션)를
+     화면에서 놓치지 않게 한다. 그리드 행 높이는 이 상한 + 헤더/수정 행으로 결정된다. */
+  max-height: 72vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.card-body::-webkit-scrollbar { width: 8px; }
+.card-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.card-body::-webkit-scrollbar-thumb:hover { background: #cdbfa9; }
+@media (max-width: 720px) {
+  /* 1열일 때는 카드가 나란히 서지 않으니 상한을 조금 낮춰 옆으로 넘겨 읽기 편하게 */
+  .card-body { max-height: 60vh; }
 }
 
 /* 로딩 상태 */
