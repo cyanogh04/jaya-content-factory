@@ -21,6 +21,23 @@ function topicLine(topic) {
   return topic ? `[강의 주제] ${topic}\n` : '';
 }
 
+/**
+ * 기획 컨셉 — 사용자가 적은 '전체를 관통하는 주제·방향'. 카페·캡션·캐러셀·캡쳐 4종이 같은 각으로 서게 한다.
+ * 컨셉이 사실을 만들어내는 근거가 되면 안 되므로 "자막 범위 안에서 각을 잡는 것"으로 한정한다.
+ */
+export function conceptBlock(concept) {
+  const c = (concept || '').trim();
+  if (!c) return '';
+  return `[기획 컨셉 — 이번 콘텐츠 4종(카페·캡션·캐러셀·캡쳐)을 관통하는 방향. 가장 먼저 읽고 끝까지 지킨다]
+${c}
+
+- 위 컨셉이 글의 각(무엇을 앞세우고 무엇을 뒤로 물릴지, 누구에게 말 걸지, 어떤 감정으로 시작할지)을 정한다.
+- 단, 컨셉은 방향이지 사실이 아니다. 자막에 없는 내용을 컨셉에 맞추려고 지어내지 않는다.
+  자막 재료가 컨셉과 어긋나면 자막을 따르고, 컨셉은 그 재료를 '어떻게 보여줄지'에만 쓴다.
+- 컨셉과 상충하는 소재는 버린다. 컨셉 밖 포인트를 분량 채우기용으로 끼워 넣지 않는다.
+`;
+}
+
 /** 보이스 프로파일 JSON → 프롬프트용 요약 문자열 (대표 캡션은 EXAMPLES로 분리) */
 function voiceSummary(voice) {
   const { representative_captions, ...rest } = voice || {};
@@ -283,12 +300,13 @@ ${joined}`;
 // ─────────────────────────────────────────────
 // 2. 네이버 카페 서머리 (voice 적용)
 // ─────────────────────────────────────────────
-export function buildCafePrompt({ voice, topic }) {
+export function buildCafePrompt({ voice, topic, concept }) {
   return `${voiceBlock(voice)}
 (위 예시는 자야쌤의 인스타 캡션이다. 어휘·리듬·습관만 가져오고, 인스타식 이모지 밀도와 1인칭 화자는 아래 [카페 글의 화자와 결]로 바꾼다.)
 
 ${CAFE_STYLE}
 
+${conceptBlock(concept)}
 ${BRAND_GOAL}
 
 [티저 원칙] 이 글의 목적은 강의 내용을 '설명'하는 것이 아니라, 읽는 사람이 '이 강의를 꼭 들어야겠다'는 욕구를 느끼게 하는 것이다.
@@ -319,7 +337,10 @@ ${topicLine(topic)}`;
 // ─────────────────────────────────────────────
 // 3. 캡쳐 가이드 (타임스탬프 기반 — 원본 자막 사용)
 // ─────────────────────────────────────────────
-export function buildCapturePrompt({ cafe } = {}) {
+export function buildCapturePrompt({ cafe, concept } = {}) {
+  const conceptPart = concept
+    ? `${conceptBlock(concept)}(캡쳐 가이드에서는 이 컨셉이 강조하는 장면을 "카드뉴스" 용도 컷으로 우선 고른다.)\n\n`
+    : '';
   const cafeBlock = cafe
     ? `[카페 서머리 — 아래 글의 "📷 캡쳐 n [MM:SS] …" 줄이 이미지가 들어갈 자리다]
 ${cafe}
@@ -332,7 +353,7 @@ ${cafe}
 
 `
     : '';
-  return `${cafeBlock}[작업] 위 [강의 자막]을 바탕으로 카페 글과 카드뉴스에 넣을 캡쳐 시점을 5~8개 추천한다.
+  return `${conceptPart}${cafeBlock}[작업] 위 [강의 자막]을 바탕으로 카페 글과 카드뉴스에 넣을 캡쳐 시점을 5~8개 추천한다.
 각 줄 형식: [MM:SS] — 어떤 장면인지 / 왜 이 컷이 중요한지 / 사용처
 사용처는 "카페 캡쳐 n"(위 카페 글의 자리 번호) 또는 "카드뉴스"로 적는다. 카페 자리 항목을 먼저, 번호 순서대로 나열한다.
 반드시 자막에 실제로 등장한 타임스탬프만 사용한다. 목록만 출력한다.`;
@@ -352,13 +373,14 @@ ${cafe}
 // 번호 목록으로 자동 렌더하는 근거다. 형식을 바꾸면 렌더가 깨진다. 컷 수가 가변이므로
 // 컷 번호가 아니라 '역할'로 지정한다.
 // ─────────────────────────────────────────────
-export function buildCarouselPrompt({ voice, topic }) {
+export function buildCarouselPrompt({ voice, topic, concept }) {
   return `[말투 참고] 카드에 올라가는 카피(헤드·서브·본문)는 아래 보이스 프로파일의 목소리를 살린다.
 단, 캐러셀 카피는 짧고 힘 있게 — 어휘와 태도는 프로파일을 따르되 이모지·말줄임표 남발은 절제한다.
 '짓다'는 동사로 활용하지 않는다("지어요/지어보세요/짓기 위한" 금지). 옷은 "만들어요". 철학 문구 인용 1회만 예외.
 카드 본문에 대시(—)로 부연을 잇지 않는다. 마침표나 줄바꿈으로 끊는다. 본문은 3줄·60자 안쪽(audience·solution 목록 컷 제외).
 ${voiceSummary(voice)}
 
+${conceptBlock(concept)}
 ${BRAND_GOAL}
 
 [이 캐러셀의 목적 — 가장 중요]
@@ -570,9 +592,10 @@ ${topicLine(topic)}`;
 // ─────────────────────────────────────────────
 // 5. 인스타 캡션 (voice 적용)
 // ─────────────────────────────────────────────
-export function buildCaptionPrompt({ voice, topic }) {
+export function buildCaptionPrompt({ voice, topic, concept }) {
   return `${voiceBlock(voice)}
 
+${conceptBlock(concept)}
 ${BRAND_GOAL}
 
 [이 캡션의 목적 — 캐러셀과 역할이 다르다]

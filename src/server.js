@@ -1,7 +1,8 @@
 // src/server.js — Express 서버: 정적 파일 서빙 + API 5개 (SSE 스트리밍 포함)
 //
 // POST /api/generate    — { url, topic? } → SSE (progress × N → done)
-// POST /api/revise      — { jobId, type, instruction } → { content }
+// POST /api/regenerate-all (SSE) — { jobId, concept } → 컨셉 기준으로 4종 전체 재기획
+// POST /api/revise      — { jobId, type, instruction } → { content, version, capture? }  (cafe 수정으로 📷 자리가 바뀌면 capture도 갱신해 돌려줌)
 // POST /api/regenerate  — { jobId } → { carousel, capture }
 // POST /api/learn-voice — {} → { message }
 // GET  /api/jobs        — → { jobs } (지난 작업 목록, 최신순)
@@ -13,7 +14,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateAll, revise, regenerateSecondary } from './generate.js';
+import { generateAll, regenerateAll, revise, regenerateSecondary } from './generate.js';
 import { learn as learnVoice } from './voice.js';
 import { exchangeToLongLived, autoRefreshIfNeeded } from './instagram.js';
 import { saveLectureToNotion } from './notion.js';
@@ -51,13 +52,8 @@ app.get('/api/status', async (req, res) => {
 
 // ───────────────────────── POST /api/generate (SSE) ─────────────────────────
 
-app.post('/api/generate', async (req, res) => {
-  const { url, topic } = req.body || {};
-  if (!url || typeof url !== 'string' || !url.trim()) {
-    return res.status(400).json({ error: '생성 요청: 비메오 URL을 입력하세요.' });
-  }
-
-  // SSE 헤더
+/** SSE 스트림 시작 — 헤더·소켓 설정 후 send/isGone 헬퍼를 돌려준다 (생성·전체 재기획 공용) */
+function openSSE(req, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache',
@@ -75,21 +71,31 @@ app.post('/api/generate', async (req, res) => {
     if (clientGone) return;
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
-
   // 연결 확인 — 첫 청크를 즉시 전송해 스트림 활성화
   res.write(': sse-connected\n\n');
 
+  return { send, isGone: () => clientGone };
+}
+
+/** generateAll/regenerateAll의 onProgress → SSE 이벤트 매핑 */
+const progressToSSE = (send) => (payload) => {
+  if (payload.type === 'job_created') send('start', { jobId: payload.jobId });
+  else send('progress', payload);
+};
+
+app.post('/api/generate', async (req, res) => {
+  const { url, topic, concept } = req.body || {};
+  if (!url || typeof url !== 'string' || !url.trim()) {
+    return res.status(400).json({ error: '생성 요청: 비메오 URL을 입력하세요.' });
+  }
+
+  const { send, isGone } = openSSE(req, res);
   try {
     const { jobId } = await generateAll({
       url: url.trim(),
       topic: (topic || '').trim() || undefined,
-      onProgress: (payload) => {
-        if (payload.type === 'job_created') {
-          send('start', { jobId: payload.jobId });
-        } else {
-          send('progress', payload);
-        }
-      },
+      concept: (concept || '').trim() || undefined,
+      onProgress: progressToSSE(send),
     });
     send('done', { jobId });
   } catch (err) {
@@ -97,7 +103,30 @@ app.post('/api/generate', async (req, res) => {
     console.error(`생성 실패: ${err.message}`);
     send('error', { error: err.message });
   } finally {
-    if (!clientGone) res.end();
+    if (!isGone()) res.end();
+  }
+});
+
+// ───────────────────────── POST /api/regenerate-all (SSE) ─────────────────────────
+// 컨셉이 통째로 어긋났을 때 — { jobId, concept } → 저장된 자막으로 4종을 컨셉에 맞춰 다시 생성
+
+app.post('/api/regenerate-all', async (req, res) => {
+  const { jobId, concept } = req.body || {};
+  if (!jobId) return res.status(400).json({ error: '전체 기획 다시하기: jobId가 필요합니다.' });
+  if (!concept || !String(concept).trim()) {
+    return res.status(400).json({ error: '전체 기획 다시하기: 4종을 관통할 기획 컨셉을 적어 주세요.' });
+  }
+
+  const { send, isGone } = openSSE(req, res);
+  try {
+    send('start', { jobId });
+    await regenerateAll({ jobId, concept: String(concept).trim(), onProgress: progressToSSE(send) });
+    send('done', { jobId });
+  } catch (err) {
+    console.error(`전체 기획 다시하기 실패: ${err.message}`);
+    send('error', { error: err.message });
+  } finally {
+    if (!isGone()) res.end();
   }
 });
 
@@ -109,8 +138,8 @@ app.post('/api/revise', async (req, res) => {
     return res.status(400).json({ error: '수정 요청: jobId, type, instruction이 모두 필요합니다.' });
   }
   try {
-    const { content, version } = await revise({ jobId, type, instruction });
-    res.json({ content, version });
+    const { content, version, capture, captureError } = await revise({ jobId, type, instruction });
+    res.json({ content, version, capture: capture || null, captureError: captureError || null });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: err.message });

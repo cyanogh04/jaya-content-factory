@@ -25,6 +25,8 @@
           placeholder="강의 주제 (선택)"
           autocomplete="off" />
       </div>
+      <textarea id="concept-input" class="input-concept" rows="2"
+        placeholder="기획 컨셉 (선택) — 4종을 관통할 방향. 예: 초보가 '옷장에 걸리는 첫 옷'을 완성하는 이야기로. 결 잡기·심지 실패담을 앞세우고 기술 나열은 뒤로"></textarea>
       <button id="generate-btn" class="btn btn-primary">생성 시작</button>
     </section>
 
@@ -121,6 +123,19 @@
         </article>
 
       </div><!-- .sections-grid -->
+
+      <!-- 컨셉이 통째로 어긋났을 때: 관통하는 주제를 적고 4종을 다시 기획 -->
+      <section id="concept-row" class="concept-row" hidden>
+        <div class="concept-head">
+          <span class="concept-title">전체 기획 다시하기</span>
+          <span class="concept-hint">컨셉이 어긋났나요? 카페·캡션·캐러셀·캡쳐 4종을 관통할 주제와 방향을 적으면 저장된 자막으로 처음부터 다시 기획합니다. 이전 버전은 이력에 남습니다.</span>
+        </div>
+        <div class="concept-body">
+          <textarea id="concept-redo" class="input-concept" rows="3"
+            placeholder="예: '15년차가 뜯어본 명품 봉제'가 아니라 '초보가 처음 완성하는 코트'로. 실패담(결 틀어짐·심지 우글거림)을 앞세우고, 기술 이름은 solution 컷에만."></textarea>
+          <button id="regen-all-btn" class="btn btn-primary btn-regen-all" disabled>이 컨셉으로 4종 다시 기획</button>
+        </div>
+      </section>
 
       <div id="regen-row" class="regen-row" hidden>
         <p class="regen-hint">카페 서머리·캡션을 확정하셨나요?</p>

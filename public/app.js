@@ -17,6 +17,10 @@ const $results    = $('results');
 const $statusBar  = $('status-bar');
 const $regenRow   = $('regen-row');
 const $regenBtn       = $('regen-btn');
+const $concept        = $('concept-input');   // 첫 생성 시 기획 컨셉(선택)
+const $conceptRow     = $('concept-row');     // 전체 기획 다시하기 영역
+const $conceptRedo    = $('concept-redo');
+const $regenAllBtn    = $('regen-all-btn');
 const $saveNotionBtn  = $('save-notion-btn');
 const $learnBtn            = $('learn-voice-btn');
 const $exchangeTokenBtn    = $('exchange-token-btn');
@@ -86,6 +90,12 @@ function bindEvents() {
 
   // 캐러셀·캡쳐 재생성
   $regenBtn.addEventListener('click', handleRegenSecondary);
+
+  // 전체 기획 다시하기 — 컨셉을 적어야 버튼이 살아난다
+  $conceptRedo.addEventListener('input', () => {
+    $regenAllBtn.disabled = !currentJobId || !$conceptRedo.value.trim();
+  });
+  $regenAllBtn.addEventListener('click', handleRegenAll);
 
   // 노션에 저장
   $saveNotionBtn.addEventListener('click', handleSaveToNotion);
@@ -182,6 +192,8 @@ async function openJob(jobId, itemEl) {
       $regenRow.removeAttribute('hidden');
       $saveNotionBtn.disabled = !TYPES.every((t) => sectionContent[t]);
     }
+    $conceptRedo.value = '';
+    showConceptRow();
     $results.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
     TYPES.forEach((t) => setCardError(t, err.message));
@@ -199,12 +211,15 @@ async function handleGenerate() {
   const url = $url.value.trim();
   if (!url) { $url.focus(); return; }
   const topic = $topic.value.trim();
+  const concept = $concept.value.trim();
 
   // 상태 초기화
   currentJobId = null;
   setActiveHistoryItem(null); // 새 생성 시작 — 히스토리 선택 해제
   TYPES.forEach((t) => { sectionContent[t] = null; });
   $regenRow.setAttribute('hidden', '');
+  $conceptRow.setAttribute('hidden', '');
+  $conceptRedo.value = concept; // 처음 적은 컨셉을 다시하기 칸에 미리 채워 고쳐 쓰기 쉽게
 
   // 결과 영역 표시 + 스피너
   $results.removeAttribute('hidden');
@@ -216,7 +231,7 @@ async function handleGenerate() {
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, topic: topic || undefined }),
+      body: JSON.stringify({ url, topic: topic || undefined, concept: concept || undefined }),
     });
 
     if (!res.ok) {
@@ -283,16 +298,23 @@ function handleSSEEvent(event, data) {
       // 4종 모두 완성된 경우에만 노션 저장 활성화
       $saveNotionBtn.disabled = !TYPES.every((t) => sectionContent[t]);
     }
+    showConceptRow(); // 결과가 나왔으니 '전체 기획 다시하기'를 열어 둔다
     loadHistory(); // 방금 만든 작업이 히스토리에 바로 보이도록 갱신
   } else if (event === 'error') {
     TYPES.forEach((t) => { if (!sectionContent[t]) setCardError(t, data.error); });
   }
 }
 
+/** '전체 기획 다시하기' 영역 표시 — jobId가 있고 컨셉을 적었을 때만 버튼 활성 */
+function showConceptRow() {
+  $conceptRow.removeAttribute('hidden');
+  $regenAllBtn.disabled = !currentJobId || !$conceptRedo.value.trim();
+}
+
 // ─── 섹션 상태 관리 ──────────────────────────────────────
-function setCardLoading(type) {
+function setCardLoading(type, text = '생성 중…') {
   const body = $(`body-${type}`);
-  body.innerHTML = `<div class="skeleton-wrap"><div class="spinner"></div><p class="loading-text">생성 중…</p></div>`;
+  body.innerHTML = `<div class="skeleton-wrap"><div class="spinner"></div><p class="loading-text">${escapeHtml(text)}</p></div>`;
   const card = $(`card-${type}`);
   card.classList.remove('is-done', 'is-error');
   card.querySelector('.btn-copy').disabled = true;
@@ -384,11 +406,28 @@ async function handleRevise(type, instructionOverride, doneMessage) {
   const previous = sectionContent[type];
   setCardLoading(type);
 
+  // 카페 글이 바뀌면 📷 캡쳐 자리가 달라질 수 있어 서버가 캡쳐 가이드도 같이 갱신한다 — 그동안 캡쳐 카드에 표시
+  const previousCapture = type === 'cafe' ? sectionContent.capture : null;
+  if (type === 'cafe' && previousCapture) setCardLoading('capture', '카페 수정 반영 확인 중…');
+
   try {
     const data = await apiFetch('POST', '/api/revise', { jobId: currentJobId, type, instruction });
     setCardContent(type, data.content);
     $(`revise-${type}`).value = '';
-    showToast(doneMessage || '수정 완료');
+
+    if (type === 'cafe') {
+      if (data.capture) {
+        setCardContent('capture', data.capture);
+        showToast('카페 서머리 수정 완료 · 캡쳐 자리가 바뀌어 캡쳐 가이드도 새로 맞췄습니다');
+      } else {
+        if (previousCapture) setCardContent('capture', previousCapture);
+        showToast(data.captureError
+          ? `카페 수정 완료 · 캡쳐 가이드 갱신은 실패했습니다: ${data.captureError}`
+          : (doneMessage || '수정 완료 (캡쳐 자리는 그대로라 캡쳐 가이드 유지)'));
+      }
+    } else {
+      showToast(doneMessage || '수정 완료');
+    }
   } catch (err) {
     if (previous) {
       setCardContent(type, previous);
@@ -396,6 +435,7 @@ async function handleRevise(type, instructionOverride, doneMessage) {
     } else {
       setCardError(type, err.message);
     }
+    if (previousCapture) setCardContent('capture', previousCapture);
   } finally {
     reviseBtn.disabled = false;
     reviseBtn.textContent = '재생성';
@@ -498,6 +538,40 @@ async function handleSaveToNotion() {
   } finally {
     $saveNotionBtn.disabled = false;
     $saveNotionBtn.textContent = '노션에 저장';
+  }
+}
+
+// ─── 전체 기획 다시하기 (컨셉 기준 4종 재생성) ──────────────
+async function handleRegenAll() {
+  if (!currentJobId) { showToast('생성이 완료된 후 다시 기획할 수 있습니다'); return; }
+  const concept = $conceptRedo.value.trim();
+  if (!concept) { $conceptRedo.focus(); return; }
+  if (!confirm('카페·캡션·캐러셀·캡쳐 4종을 이 컨셉으로 처음부터 다시 기획합니다.\n이전 버전은 이력에 남습니다. 진행할까요?')) return;
+
+  $regenAllBtn.disabled = true;
+  $regenAllBtn.textContent = '4종 다시 기획 중…';
+  $regenRow.setAttribute('hidden', '');
+  TYPES.forEach((t) => { sectionContent[t] = null; });
+  TYPES.forEach((t) => setCardLoading(t, '컨셉에 맞춰 다시 기획 중…'));
+  $results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const res = await fetch('/api/regenerate-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId: currentJobId, concept }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `서버 오류 (HTTP ${res.status})`);
+    }
+    await readSSE(res, handleSSEEvent);
+    showToast('컨셉에 맞춰 4종을 다시 기획했습니다');
+  } catch (err) {
+    TYPES.forEach((t) => { if (!sectionContent[t]) setCardError(t, err.message); });
+  } finally {
+    $regenAllBtn.textContent = '이 컨셉으로 4종 다시 기획';
+    $regenAllBtn.disabled = !currentJobId || !$conceptRedo.value.trim();
   }
 }
 

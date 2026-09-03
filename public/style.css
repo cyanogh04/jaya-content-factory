@@ -108,6 +108,54 @@ input[type="text"]:focus {
   border-color: var(--navy);
 }
 
+/* 기획 컨셉 입력 (첫 생성 · 전체 기획 다시하기 공용) */
+.input-concept {
+  display: block;
+  width: 100%;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: .92rem;
+  font-family: inherit;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--card-bg);
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.input-concept:focus { border-color: var(--navy); }
+.input-concept::placeholder { color: #9aa0a6; }
+
+/* ─── 전체 기획 다시하기 ─────────────────────────────────── */
+.concept-row {
+  background: var(--card-bg);
+  border: 1.5px solid var(--navy);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin: 24px 0 16px;
+  box-shadow: var(--shadow);
+}
+.concept-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.concept-title {
+  font-weight: 700;
+  color: var(--navy);
+  font-size: .98rem;
+}
+.concept-hint {
+  font-size: .84rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.concept-body .input-concept { margin-bottom: 10px; }
+.btn-regen-all { width: 100%; }
+
 /* ─── 버튼 ──────────────────────────────────────────────── */
 .btn {
   display: inline-flex;

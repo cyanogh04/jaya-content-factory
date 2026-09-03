@@ -115,72 +115,49 @@ export async function finalizeCarousel({ content, job, voice, cafe, caption, lab
 }
 
 /** 섹션별 호출 사양 구성 */
-function buildSectionSpecs({ voice, topic, compressed, full }) {
+function buildSectionSpecs({ voice, topic, concept, compressed, full }) {
   return [
     {
       type: 'cafe',
       model: MODELS.CAFE,
       transcript: compressed,
-      prompt: buildCafePrompt({ voice, topic }),
+      prompt: buildCafePrompt({ voice, topic, concept }),
     },
     {
       type: 'caption',
       model: MODELS.CAPTION,
       transcript: compressed,
-      prompt: buildCaptionPrompt({ voice, topic }),
+      prompt: buildCaptionPrompt({ voice, topic, concept }),
     },
     {
       type: 'carousel',
       model: MODELS.CAROUSEL,
       transcript: compressed,
-      prompt: buildCarouselPrompt({ voice, topic }),
+      prompt: buildCarouselPrompt({ voice, topic, concept }),
       maxTokens: 16000, // 장면 지시서 형식이라 출력이 길다 — 잘림 방지
     },
     {
       type: 'capture',
       model: MODELS.CAPTURE,
       transcript: full,
-      prompt: buildCapturePrompt(),
+      prompt: buildCapturePrompt({ concept }),
     },
   ];
 }
 
 /**
- * 메인 플로우: URL → 자막 수집 → 4종 순차 생성.
- * 각 섹션 완료(또는 실패) 시 onProgress 콜백 호출. 한 섹션이 실패해도 다음 섹션은 계속 진행.
+ * 4종 순차 생성 공통 루프 — 첫 생성(generateAll)과 전체 재기획(regenerateAll)이 함께 쓴다.
+ * 각 섹션 완료(또는 실패) 시 onProgress 호출. 한 섹션이 실패해도 다음 섹션은 계속 진행.
  *
- * @param {object} opts
- * @param {string} opts.url - 비메오 URL
- * @param {string} [opts.topic] - 강의 주제 (선택)
- * @param {(payload: {type: string, content?: string, error?: string}) => void} opts.onProgress
- * @returns {Promise<{jobId: string, results: object, failed: string[]}>}
+ * @returns {Promise<{results: object, failed: string[]}>}
  */
-export async function generateAll({ url, topic, onProgress = () => {} }) {
-  // 절대 규칙 1: 보이스 프로파일이 없으면 생성 자체를 시작하지 않는다
-  const voice = await loadVoice();
-  console.log('보이스 프로파일 로드 완료');
-
-  console.log('자막 수집 시작...');
-  const transcript = await getTranscript(url);
-
-  const job = await saveJob({
-    video_id: transcript.videoId,
-    video_title: transcript.title,
-    vimeo_url: url,
-    topic: topic || null,
-    transcript_compressed: transcript.compressed,
-    transcript_full: transcript.full,
-  });
-  console.log(`작업 생성: ${job.id} (${transcript.title})`);
-
-  // 클라이언트에 작업 ID를 즉시 전달 — 콘텐츠 생성 완료 전에도 수정 요청 가능하게 함
-  onProgress({ type: 'job_created', jobId: job.id });
-
+async function runSections({ job, voice, topic, concept, onProgress }) {
   const specs = buildSectionSpecs({
     voice,
     topic,
-    compressed: transcript.compressed,
-    full: transcript.full,
+    concept,
+    compressed: job.transcript_compressed,
+    full: job.transcript_full,
   });
 
   const results = {};
@@ -191,7 +168,7 @@ export async function generateAll({ url, topic, onProgress = () => {} }) {
     console.log(`${label} 생성 중...`);
     try {
       // 캡쳐 가이드는 카페 서머리의 "📷 캡쳐 n" 자리와 맞물려야 하므로, 앞서 생성된 카페 글을 넘긴다
-      const prompt = spec.type === 'capture' ? buildCapturePrompt({ cafe: results.cafe }) : spec.prompt;
+      const prompt = spec.type === 'capture' ? buildCapturePrompt({ cafe: results.cafe, concept }) : spec.prompt;
       let content = await callClaude({
         model: spec.model,
         system: COMMON_HEADER,
@@ -215,6 +192,80 @@ export async function generateAll({ url, topic, onProgress = () => {} }) {
     }
   }
 
+  return { results, failed };
+}
+
+/**
+ * 캡쳐 가이드가 따라가는 카페 글의 "📷 캡쳐 n [MM:SS] …" 자리표시 줄만 뽑는다.
+ * 카페 수정 전후로 이 줄들이 달라졌으면 캡쳐 가이드도 다시 만들어야 한다.
+ */
+function captureMarkers(cafeText) {
+  return ((cafeText || '').match(/📷[^\n]*/g) || []).map((s) => s.trim()).join('\n');
+}
+
+/**
+ * 메인 플로우: URL → 자막 수집 → 4종 순차 생성.
+ * 각 섹션 완료(또는 실패) 시 onProgress 콜백 호출. 한 섹션이 실패해도 다음 섹션은 계속 진행.
+ *
+ * @param {object} opts
+ * @param {string} opts.url - 비메오 URL
+ * @param {string} [opts.topic] - 강의 주제 (선택)
+ * @param {string} [opts.concept] - 기획 컨셉: 4종을 관통하는 방향 (선택)
+ * @param {(payload: {type: string, content?: string, error?: string}) => void} opts.onProgress
+ * @returns {Promise<{jobId: string, results: object, failed: string[]}>}
+ */
+export async function generateAll({ url, topic, concept, onProgress = () => {} }) {
+  // 절대 규칙 1: 보이스 프로파일이 없으면 생성 자체를 시작하지 않는다
+  const voice = await loadVoice();
+  console.log('보이스 프로파일 로드 완료');
+
+  console.log('자막 수집 시작...');
+  const transcript = await getTranscript(url);
+
+  const job = await saveJob({
+    video_id: transcript.videoId,
+    video_title: transcript.title,
+    vimeo_url: url,
+    topic: topic || null,
+    transcript_compressed: transcript.compressed,
+    transcript_full: transcript.full,
+  });
+  console.log(`작업 생성: ${job.id} (${transcript.title})`);
+
+  // 클라이언트에 작업 ID를 즉시 전달 — 콘텐츠 생성 완료 전에도 수정 요청 가능하게 함
+  onProgress({ type: 'job_created', jobId: job.id });
+
+  const { results, failed } = await runSections({ job, voice, topic, concept, onProgress });
+  return { jobId: job.id, results, failed };
+}
+
+/**
+ * 전체 기획 다시하기 — 컨셉이 통째로 어긋났을 때. 기존 작업의 자막을 그대로 쓰고,
+ * 사용자가 적은 [기획 컨셉]을 4종 프롬프트 전부에 넣어 cafe → caption → carousel → capture를 다시 생성한다.
+ * 각 섹션은 새 버전으로 저장된다(이전 버전은 이력에 남음).
+ *
+ * @returns {Promise<{jobId: string, results: object, failed: string[]}>}
+ */
+export async function regenerateAll({ jobId, concept, onProgress = () => {} }) {
+  const step = '전체 기획 다시하기';
+  if (!concept || !concept.trim()) throw new Error(`${step}: 기획 컨셉이 비어 있습니다. 4종을 관통할 방향을 적어 주세요.`);
+
+  const job = await getJob(jobId);
+  if (!job) throw new Error(`${step}: 작업(${jobId})을 찾을 수 없습니다.`);
+  if (!job.transcript_compressed || !job.transcript_full) {
+    throw new Error(`${step}: 이 작업에는 저장된 자막이 없어 다시 기획할 수 없습니다.`);
+  }
+
+  const voice = await loadVoice();
+  console.log(`${step} 시작 (컨셉: ${concept.trim().slice(0, 60)})`);
+  const { results, failed } = await runSections({
+    job,
+    voice,
+    topic: job.topic || undefined,
+    concept: concept.trim(),
+    onProgress,
+  });
+  console.log(`${step} 완료 (실패: ${failed.length ? failed.join(', ') : '없음'})`);
   return { jobId: job.id, results, failed };
 }
 
@@ -273,7 +324,29 @@ export async function revise({ jobId, type, instruction }) {
 
   const row = await saveContent(jobId, type, content);
   console.log(`${label} 수정 완료 (버전 ${row.version})`);
-  return { content, version: row.version };
+
+  // 카페 글이 바뀌어 "📷 캡쳐 n" 자리가 달라졌으면 캡쳐 가이드도 따라 바뀌어야 한다 — 이전 자리를 물고 있으면 안 된다.
+  let capture = null;
+  if (type === 'cafe' && captureMarkers(latest.content) !== captureMarkers(content)) {
+    console.log('카페 캡쳐 자리가 바뀜 → 캡쳐 가이드 갱신 중...');
+    try {
+      capture = await callClaude({
+        model: MODELS.CAPTURE,
+        system: COMMON_HEADER,
+        prompt: buildCapturePrompt({ cafe: content }),
+        transcript: job.transcript_full, // 타임스탬프 정확도를 위해 원본 자막
+        maxTokens: 8000,
+        step: '캡쳐 가이드 갱신',
+      });
+      await saveContent(jobId, 'capture', capture);
+      console.log('캡쳐 가이드 갱신 완료');
+    } catch (err) {
+      // 카페 수정 자체는 성공했으므로 실패를 통째로 던지지 않고 알림만 넘긴다
+      console.error(`캡쳐 가이드 갱신 실패: ${err.message}`);
+      return { content, version: row.version, capture: null, captureError: err.message };
+    }
+  }
+  return { content, version: row.version, capture };
 }
 
 /**
