@@ -21,6 +21,24 @@ import {
 } from './prompts.js';
 import { saveJob, saveContent, getJob, getLatestContent } from './db.js';
 
+// 기획 컨셉은 jobs 테이블에 칸이 없어 contents의 'concept' 타입으로 버전 저장한다(첫 생성·전체 다시하기마다 새 버전).
+// 수정(revise)·재생성·컷 수 조정처럼 나중에 도는 모델 호출은 전부 여기서 최신 컨셉을 읽어 프롬프트에 싣는다 —
+// 안 그러면 컨셉이 첫 생성에만 적용되고 후크 안을 바꾸는 순간 빠진다(2026-09-05 발견).
+export const CONCEPT_TYPE = 'concept';
+
+async function saveConcept(jobId, concept) {
+  const text = (concept || '').trim();
+  if (!text) return null;
+  return saveContent(jobId, CONCEPT_TYPE, text);
+}
+
+/** 작업에 저장된 최신 기획 컨셉 (없으면 undefined) */
+export async function loadConcept(jobId) {
+  const row = await getLatestContent(jobId, CONCEPT_TYPE);
+  const text = (row?.content || '').trim();
+  return text || undefined;
+}
+
 /**
  * 캐러셀 컷 수 공통 규칙 검증 — 기획안은 그대로 캐러셀 공장에서 카드로 만들어지므로
  * (1) 실제 CUT 개수가 CAROUSEL_CUT_MIN~MAX 안인지, (2) CUT 번호가 1부터 빠짐없이 이어지는지 확인하고
@@ -70,10 +88,11 @@ export function normalizeCarouselCuts(content, label = '캐러셀 기획') {
  * @param {object} o.voice 보이스 프로파일
  * @param {string} [o.cafe] 확정 카페 서머리(있으면 컨텍스트)
  * @param {string} [o.caption] 확정 인스타 캡션(있으면 컨텍스트)
+ * @param {string} [o.concept] 기획 컨셉(있으면 재요청 프롬프트에도 싣는다)
  * @param {string} o.label 로그 접두어
  * @returns {Promise<string>} 최종 기획안
  */
-export async function finalizeCarousel({ content, job, voice, cafe, caption, label }) {
+export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, label }) {
   let { content: fixed, count } = normalizeCarouselCuts(content, label);
   const inRange = (n) => n >= CAROUSEL_CUT_MIN && n <= CAROUSEL_CUT_MAX;
   if (count === 0 || inRange(count)) return fixed;
@@ -98,6 +117,7 @@ export async function finalizeCarousel({ content, job, voice, cafe, caption, lab
       instruction,
       voice,
       topic: job.topic || undefined,
+      concept,
       cafe,
       caption,
     }),
@@ -250,6 +270,7 @@ export async function generateAll({ url, topic, concept, onProgress = () => {} }
     transcript_full: transcript.full,
   });
   console.log(`작업 생성: ${job.id} (${transcript.title})`);
+  await saveConcept(job.id, concept);
 
   // 클라이언트에 작업 ID를 즉시 전달 — 콘텐츠 생성 완료 전에도 수정 요청 가능하게 함
   onProgress({ type: 'job_created', jobId: job.id });
@@ -277,6 +298,7 @@ export async function regenerateAll({ jobId, concept, onProgress = () => {} }) {
 
   const voice = await loadVoice();
   console.log(`${step} 시작 (컨셉: ${concept.trim().slice(0, 60)})`);
+  await saveConcept(job.id, concept);
   const { results, failed } = await runSections({
     job,
     voice,
@@ -318,6 +340,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
   if (!latest) throw new Error(`${step}: 수정할 ${TYPE_LABELS[type]} 원본이 없습니다. 먼저 생성을 완료하세요.`);
 
   const voice = await loadVoice();
+  const concept = await loadConcept(jobId);
 
   // 캐러셀 수정은 확정된 카페·캡션을 컨텍스트로 넣는다(없으면 자막만으로 진행).
   let extra = {};
@@ -334,13 +357,13 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
   let content = await callClaude({
     model: REVISE_MODELS[type],
     system: COMMON_HEADER,
-    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, ...extra }),
+    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, concept, ...extra }),
     transcript: job.transcript_compressed,
     maxTokens: type === 'carousel' ? 16000 : 8000, // 캐러셀은 장면 지시서 형식이라 출력이 길다
     step: `${label} 수정`,
   });
   if (type === 'carousel') {
-    content = await finalizeCarousel({ content, job, voice, cafe: extra.cafe, caption: extra.caption, label: `${label} 수정` });
+    content = await finalizeCarousel({ content, job, voice, cafe: extra.cafe, caption: extra.caption, concept, label: `${label} 수정` });
   }
 
   const row = await saveContent(jobId, type, content);
@@ -354,7 +377,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
       capture = await callClaude({
         model: MODELS.CAPTURE,
         system: COMMON_HEADER,
-        prompt: buildCapturePrompt({ cafe: content }),
+        prompt: buildCapturePrompt({ cafe: content, concept }),
         transcript: job.transcript_full, // 타임스탬프 정확도를 위해 원본 자막
         maxTokens: 8000,
         step: '캡쳐 가이드 갱신',
@@ -394,6 +417,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
             original: captionRow.content,
             instruction: alignInstruction,
             voice,
+            concept,
             carousel: content,
           }),
           transcript: job.transcript_compressed,
@@ -430,7 +454,8 @@ export async function regenerateSecondary({ jobId }) {
   }
 
   const voice = await loadVoice();
-  const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined };
+  const concept = await loadConcept(jobId);
+  const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined, concept };
 
   console.log('캐러셀 기획 재생성 중...');
   let carousel = await callClaude({
@@ -442,7 +467,7 @@ export async function regenerateSecondary({ jobId }) {
     step: '캐러셀 기획 재생성',
   });
   carousel = await finalizeCarousel({
-    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, label: '캐러셀 기획 재생성',
+    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, label: '캐러셀 기획 재생성',
   });
   await saveContent(jobId, 'carousel', carousel);
   console.log('캐러셀 기획 재생성 완료');

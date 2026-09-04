@@ -203,13 +203,21 @@ async function openJob(jobId, itemEl) {
       $regenRow.removeAttribute('hidden');
       $saveNotionBtn.disabled = !TYPES.every((t) => sectionContent[t]);
     }
-    $conceptRedo.value = '';
+    // 저장된 기획 컨셉(contents의 'concept' 타입, 최신 버전)을 다시하기 칸에 미리 채운다 — 무엇을 기준으로 기획됐는지 보이게
+    $conceptRedo.value = latestConceptOf(data.contents || []);
     showConceptRow();
     $results.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
     TYPES.forEach((t) => setCardError(t, err.message));
     showToast(`⚠️ ${err.message}`);
   }
+}
+
+/** 저장된 기획 컨셉의 최신 버전 (없으면 빈 문자열) — 서버는 컨셉을 contents의 'concept' 타입으로 버전 저장한다 */
+function latestConceptOf(contents) {
+  const rows = contents.filter((c) => c.type === 'concept' && typeof c.content === 'string');
+  if (rows.length === 0) return '';
+  return rows.reduce((a, b) => (a.version >= b.version ? a : b)).content.trim();
 }
 
 function setActiveHistoryItem(itemEl) {

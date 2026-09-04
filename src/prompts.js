@@ -664,9 +664,9 @@ ${topicLine(topic)}`;
 // ─────────────────────────────────────────────
 // 수정(revise) — 카페 서머리 / 인스타 캡션 / 캐러셀 기획
 // ─────────────────────────────────────────────
-export function buildRevisePrompt({ type, original, instruction, voice, topic, cafe, caption, carousel }) {
+export function buildRevisePrompt({ type, original, instruction, voice, topic, concept, cafe, caption, carousel }) {
   if (type === 'carousel') {
-    return buildCarouselRevisePrompt({ original, instruction, voice, topic, cafe, caption });
+    return buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption });
   }
   const label = TYPE_LABELS[type];
   // 캡션 수정에 짝꿍 캐러셀 기획안이 딸려 오면(후크 안 교체 뒤 캡션 맞추기) — 같은 게시물의 카드와 결을 맞춘다
@@ -696,6 +696,7 @@ ${carousel}
   const styleBlock = type === 'cafe' ? `\n${CAFE_STYLE}\n` : '';
   return `${voiceBlock(voice)}
 ${styleBlock}
+${conceptBlock(concept)}
 ${BRAND_GOAL}
 ${pairBlock}
 [티저 원칙 유지] 수정 후에도 아래 [노출 수위]·[검색 노출] 기준을 유지한다. 독자가 수강 욕구를 느끼도록 진단은 선명하게, 처방은 강의에 남기는 방향을 지킨다.
@@ -721,7 +722,7 @@ ${instruction}`;
 // 캐러셀 기획 수정 — 규칙·출력 형식은 원본 프롬프트를 그대로 싣고, 그 위에 '기존 기획안을 어떻게 고칠지'만 덧붙인다.
 // 가장 흔한 지시는 후크 안 교체("B안으로")다. 이때 1컷만 바꾸면 열린 고리·감정 곡선이 어긋나므로
 // 연결된 부분까지 함께 맞추게 하고, 반대로 바꿀 이유 없는 컷은 건드리지 않게 한다.
-function buildCarouselRevisePrompt({ original, instruction, voice, topic, cafe, caption }) {
+function buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption }) {
   const context =
     cafe && caption
       ? `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캐러셀은 이 내용과 메시지·표현이 일관되어야 한다.
@@ -734,7 +735,7 @@ ${caption}
 `
       : '';
 
-  return `${context}${buildCarouselPrompt({ voice, topic })}
+  return `${context}${buildCarouselPrompt({ voice, topic, concept })}
 
 [수정 작업 — 위 규칙과 출력 형식을 그대로 지키면서, 아래 [기존 기획안]을 [수정 지시]대로 고쳐 기획안 전체를 다시 출력한다]
 ▸ 후크 안을 바꾸라는 지시(예: "B안으로 다시 기획")일 때
@@ -769,7 +770,7 @@ ${instruction}`;
 // ─────────────────────────────────────────────
 // 재생성(regenerate) — 확정된 카페·캡션 기반으로 캐러셀·캡쳐 재생성
 // ─────────────────────────────────────────────
-export function buildRegeneratePrompt({ type, cafe, caption, topic, voice }) {
+export function buildRegeneratePrompt({ type, cafe, caption, topic, concept, voice }) {
   const context = `[확정된 카페 서머리]
 ${cafe}
 
@@ -780,13 +781,13 @@ ${caption}`;
     return `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캐러셀은 이 내용과 메시지·표현이 일관되어야 한다.
 ${context}
 
-${buildCarouselPrompt({ voice, topic })}`;
+${buildCarouselPrompt({ voice, topic, concept })}`;
   }
   if (type === 'capture') {
     return `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캡쳐 시점은 이 내용에서 강조된 장면을 우선 반영한다.
 ${context}
 
-${buildCapturePrompt({ cafe })}`;
+${buildCapturePrompt({ cafe, concept })}`;
   }
   throw new Error(`프롬프트 조립: 재생성 대상이 아닌 타입입니다 — ${type}`);
 }
