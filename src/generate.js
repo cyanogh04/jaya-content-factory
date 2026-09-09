@@ -1,7 +1,10 @@
 // src/generate.js — 4종 순차 생성 오케스트레이션 + 수정(revise: cafe·caption·carousel) + 재생성(regenerateSecondary)
 //
-// 생성 순서: cafe → caption → carousel → capture
-// 자막 사용: cafe·caption·carousel → compressed / capture → full (타임스탬프 정확도)
+// 생성 순서: (강의 지도) → cafe → caption → carousel → capture
+// 자막 사용: cafe → compressed / 강의 지도·caption·carousel·capture → full
+//   (2026-09-09: 캡션·캐러셀도 원본 자막을 받는다. 60분 넘는 강의는 압축본이 30초에 한 줄이라
+//    강의가 무엇인지 알 수 없었고, 그게 "바지 수업에 오버록 후크"의 뿌리였다. 캡션·캐러셀·캡쳐가 같은
+//    원본 블록을 쓰므로 캐시는 한 번만 만들어진다.)
 // 프롬프트 캐싱: 동일 모델·동일 자막 블록이면 캐시 재사용 (anthropic.js가 처리)
 
 import { callClaude, MODELS } from './anthropic.js';
@@ -14,12 +17,44 @@ import {
   buildCaptionPrompt,
   buildCarouselPrompt,
   buildCapturePrompt,
+  buildLectureMapPrompt,
   buildRevisePrompt,
   buildRegeneratePrompt,
   CAROUSEL_CUT_MIN,
   CAROUSEL_CUT_MAX,
 } from './prompts.js';
 import { saveJob, saveContent, getJob, getLatestContent } from './db.js';
+
+// 강의 지도 — 원본 자막 전체를 읽어 "이 강의가 어떤 강의인지"(강의 한 줄·주인공 배움·덤·결과물…)를 정리한 것.
+// 캡션·캐러셀의 첫 생성·수정·재생성이 전부 이 지도를 앞에 두고 쓴다. 작업당 한 번 만들고 contents에 저장한다
+// (컨셉과 달리 사실 정리라 '전체 기획 다시하기'에서도 다시 만들지 않는다). 지도가 없는 옛 작업은 필요할 때 만들어 채운다.
+export const LECTURE_MAP_TYPE = 'lecture_map';
+
+/** 작업에 저장된 강의 지도 (없으면 undefined) */
+export async function loadLectureMap(jobId) {
+  const row = await getLatestContent(jobId, LECTURE_MAP_TYPE);
+  const text = (row?.content || '').trim();
+  return text || undefined;
+}
+
+/** 강의 지도를 읽고, 없으면 원본 자막으로 만들어 저장한 뒤 돌려준다 */
+export async function ensureLectureMap(job) {
+  const saved = await loadLectureMap(job.id);
+  if (saved) return saved;
+  if (!job.transcript_full) throw new Error('강의 파악: 이 작업에는 저장된 원본 자막이 없습니다.');
+  console.log('강의 파악 중... (원본 자막 전체를 읽어 강의 지도 작성)');
+  const map = await callClaude({
+    model: MODELS.CAROUSEL,
+    system: COMMON_HEADER,
+    prompt: buildLectureMapPrompt({ topic: job.topic || undefined }),
+    transcript: job.transcript_full,
+    maxTokens: 4000,
+    step: '강의 파악',
+  });
+  await saveContent(job.id, LECTURE_MAP_TYPE, map);
+  console.log(`강의 파악 완료 (${map.length}자)`);
+  return map;
+}
 
 // 기획 컨셉은 jobs 테이블에 칸이 없어 contents의 'concept' 타입으로 버전 저장한다(첫 생성·전체 다시하기마다 새 버전).
 // 수정(revise)·재생성·컷 수 조정처럼 나중에 도는 모델 호출은 전부 여기서 최신 컨셉을 읽어 프롬프트에 싣는다 —
@@ -89,10 +124,11 @@ export function normalizeCarouselCuts(content, label = '캐러셀 기획') {
  * @param {string} [o.cafe] 확정 카페 서머리(있으면 컨텍스트)
  * @param {string} [o.caption] 확정 인스타 캡션(있으면 컨텍스트)
  * @param {string} [o.concept] 기획 컨셉(있으면 재요청 프롬프트에도 싣는다)
+ * @param {string} [o.lectureMap] 강의 지도(있으면 재요청 프롬프트에도 싣는다)
  * @param {string} o.label 로그 접두어
  * @returns {Promise<string>} 최종 기획안
  */
-export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, label }) {
+export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, lectureMap, label }) {
   let { content: fixed, count } = normalizeCarouselCuts(content, label);
   const inRange = (n) => n >= CAROUSEL_CUT_MIN && n <= CAROUSEL_CUT_MAX;
   if (count === 0 || inRange(count)) return fixed;
@@ -100,11 +136,11 @@ export async function finalizeCarousel({ content, job, voice, cafe, caption, con
   const target = count > CAROUSEL_CUT_MAX ? CAROUSEL_CUT_MAX : CAROUSEL_CUT_MIN;
   const how =
     count > CAROUSEL_CUT_MAX
-      ? `detail·proof·empathy 구간에서 가장 약한 컷을 버려 ${target}컷으로 줄인다. 버린 detail 항목은 solution 목록의 항목명으로만 남긴다.`
-      : `empathy·detail·proof·objection·result 확장 구간에서 자막 근거가 있는 컷을 보태 ${target}컷으로 늘린다. 같은 말을 반복하는 컷은 넣지 않는다.`;
+      ? `learn·bonus 구간에서 가장 약한 컷을 버려 ${target}컷으로 줄인다. 버린 소재는 solution 목록의 이름으로만 남긴다.`
+      : `learn·bonus 확장 구간에서 자막 근거가 있는 배움·덤을 한 컷에 하나씩 보태 ${target}컷으로 늘린다. 이미 나온 소재를 되풀이하는 컷은 넣지 않는다.`;
   const instruction =
     `현재 기획안은 총 ${count}컷으로 [컷 수 공통 규칙](${CAROUSEL_CUT_MIN}~${CAROUSEL_CUT_MAX}컷)을 어긴다. ${how} ` +
-    `hook·audience·turn·solution·urgency·cta 고정 컷과 역할 순서, 후크 후보, audience/solution 표기 형식은 그대로 두고, ` +
+    `hook·promise·solution·result·together·cta 고정 컷과 역할 순서, 후크 후보, solution 표기 형식은 그대로 두고, ` +
     `개요의 총 컷 수·감정 곡선·CUT 번호를 실제 개수에 맞춘다.`;
 
   console.warn(`${label}: 컷 수 ${count}개 → ${target}컷으로 맞추는 재요청 1회`);
@@ -120,8 +156,9 @@ export async function finalizeCarousel({ content, job, voice, cafe, caption, con
       concept,
       cafe,
       caption,
+      lectureMap,
     }),
-    transcript: job.transcript_compressed,
+    transcript: job.transcript_full || job.transcript_compressed,
     maxTokens: 16000,
     step: `${label} 컷 수 조정`,
   });
@@ -135,7 +172,7 @@ export async function finalizeCarousel({ content, job, voice, cafe, caption, con
 }
 
 /** 섹션별 호출 사양 구성 */
-function buildSectionSpecs({ voice, topic, concept, compressed, full }) {
+function buildSectionSpecs({ voice, topic, concept, lectureMap, compressed, full }) {
   return [
     {
       type: 'cafe',
@@ -146,14 +183,14 @@ function buildSectionSpecs({ voice, topic, concept, compressed, full }) {
     {
       type: 'caption',
       model: MODELS.CAPTION,
-      transcript: compressed,
-      prompt: buildCaptionPrompt({ voice, topic, concept }),
+      transcript: full, // 강의 정체를 잡아야 하므로 원본 자막 (지도와 함께)
+      prompt: buildCaptionPrompt({ voice, topic, concept, lectureMap }),
     },
     {
       type: 'carousel',
       model: MODELS.CAROUSEL,
-      transcript: compressed,
-      prompt: buildCarouselPrompt({ voice, topic, concept }),
+      transcript: full,
+      prompt: buildCarouselPrompt({ voice, topic, concept, lectureMap }),
       maxTokens: 16000, // 장면 지시서 형식이라 출력이 길다 — 잘림 방지
     },
     {
@@ -172,10 +209,15 @@ function buildSectionSpecs({ voice, topic, concept, compressed, full }) {
  * @returns {Promise<{results: object, failed: string[]}>}
  */
 async function runSections({ job, voice, topic, concept, onProgress }) {
+  // 강의 지도가 먼저다 — 캡션·캐러셀은 이걸 없이 쓰면 강의 전체를 모른 채 눈에 띄는 문장부터 잡는다.
+  // 지도 작성이 실패하면 4종 전체를 멈춘다(지도 없는 캡션·캐러셀은 예전 실패로 돌아가는 것이라 의미가 없다).
+  const lectureMap = await ensureLectureMap(job);
+
   const specs = buildSectionSpecs({
     voice,
     topic,
     concept,
+    lectureMap,
     compressed: job.transcript_compressed,
     full: job.transcript_full,
   });
@@ -198,7 +240,9 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
         step: `${label} 생성`,
       });
       if (spec.type === 'carousel') {
-        content = await finalizeCarousel({ content, job, voice, cafe: results.cafe, caption: results.caption, label });
+        content = await finalizeCarousel({
+          content, job, voice, cafe: results.cafe, caption: results.caption, concept, lectureMap, label,
+        });
       }
       await saveContent(job.id, spec.type, content);
       results[spec.type] = content;
@@ -216,18 +260,19 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
 }
 
 /**
- * 캐러셀 기획안 개요에서 채택된 후크 안을 읽는다 — { key: 'A'|'B'|'C', kind: '공감형'|'참여유도형', head }.
- * (프론트 parseHookCandidates와 같은 표기 규약: "· A안 [공감형] 헤드카피 → 근거" / "· 채택: A안 → 이유")
+ * 캐러셀 기획안 개요에서 채택된 후크 안을 읽는다 — { key: 'A'|'B'|'C', kind: '공감형'|'참여유도형'|'반전형'|'위기형', head }.
+ * (프론트 parseHookCandidates와 같은 표기 규약: "· A안 [갈래] 헤드카피 → 근거" / "· 채택: A안 → 이유".
+ *  갈래 이름은 대괄호 안 짧은 낱말이면 무엇이든 받는다 — 갈래를 늘려도 파서를 고치지 않아도 되게.)
  * 후크 안이 실제로 바뀌었는지 판단해 캡션을 따라 고칠지 정하는 데 쓴다.
  */
-function adoptedHook(planText) {
+export function adoptedHook(planText) {
   if (!planText) return null;
   const cutIdx = planText.search(/^##\s*CUT\s*\d+/m);
   const overview = cutIdx > 0 ? planText.slice(0, cutIdx) : planText;
   const adoptM = overview.match(/^\s*[·•\-*]?\s*\**채택\**\s*[:：]?\s*\**\s*([ABC])안/m);
   if (!adoptM) return null;
   const key = adoptM[1];
-  const candRe = new RegExp(`^\\s*[·•\\-*]?\\s*\\**${key}안\\**\\s*[\\[［(（]\\s*(공감형|참여유도형)\\s*[\\]］)）]\\s*[:：]?\\s*(.+)$`, 'm');
+  const candRe = new RegExp(`^\\s*[·•\\-*]?\\s*\\**${key}안\\**\\s*[\\[［(（]\\s*([^\\]］)）\\s]{1,12})\\s*[\\]］)）]\\s*[:：]?\\s*(.+)$`, 'm');
   const candM = overview.match(candRe);
   if (!candM) return { key, kind: null, head: null };
   const head = candM[2].split(/\s*(?:→|—|\||--)\s*/)[0].replace(/\*\*/g, '').replace(/^["“「『']+|["”」』']+$/g, '').trim();
@@ -341,6 +386,10 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
 
   const voice = await loadVoice();
   const concept = await loadConcept(jobId);
+  // 캡션·캐러셀 수정은 강의 지도와 원본 자막을 쓴다(옛 작업이면 여기서 지도를 만들어 채운다). 카페는 이전 그대로.
+  const usesMap = type === 'caption' || type === 'carousel';
+  const lectureMap = usesMap ? await ensureLectureMap(job) : undefined;
+  const transcript = usesMap ? job.transcript_full || job.transcript_compressed : job.transcript_compressed;
 
   // 캐러셀 수정은 확정된 카페·캡션을 컨텍스트로 넣는다(없으면 자막만으로 진행).
   let extra = {};
@@ -357,13 +406,15 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
   let content = await callClaude({
     model: REVISE_MODELS[type],
     system: COMMON_HEADER,
-    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, concept, ...extra }),
-    transcript: job.transcript_compressed,
+    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, concept, lectureMap, ...extra }),
+    transcript,
     maxTokens: type === 'carousel' ? 16000 : 8000, // 캐러셀은 장면 지시서 형식이라 출력이 길다
     step: `${label} 수정`,
   });
   if (type === 'carousel') {
-    content = await finalizeCarousel({ content, job, voice, cafe: extra.cafe, caption: extra.caption, concept, label: `${label} 수정` });
+    content = await finalizeCarousel({
+      content, job, voice, cafe: extra.cafe, caption: extra.caption, concept, lectureMap, label: `${label} 수정`,
+    });
   }
 
   const row = await saveContent(jobId, type, content);
@@ -405,9 +456,9 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
       console.log(`캐러셀 후크가 ${hookDesc}로 바뀜 → 인스타 캡션 결 맞추기 중...`);
       try {
         const alignInstruction =
-          `짝꿍 캐러셀의 1컷 후크가 ${hookDesc}로 바뀌었다. 캡션의 첫 두 줄('…더 보기' 전)을 이 안과 같은 갈래·같은 감정으로 다시 쓰고, ` +
-          `바로 이어지는 공감 확장 문단이 그 첫 줄에서 자연스럽게 흘러나오게 손본다. ` +
-          `진단·자야쌤의 근거·대상 지목·망설임 해소·손실 회피·CTA는 내용을 유지하되, 새 첫 줄과 어긋나는 문장만 고친다. ` +
+          `짝꿍 캐러셀의 1컷 후크가 ${hookDesc}로 바뀌었다. 캡션의 첫 두 줄('…더 보기' 전)을 이 안과 같은 갈래·같은 소재·같은 감정으로 다시 쓰고, ` +
+          `바로 이어지는 "이 강의가 어떤 강의인지" 문단이 그 첫 줄을 자연스럽게 받게 손본다. ` +
+          `배움과 변화·자야쌤의 이야기·덤·한 강만으로 이만큼·같이 만들어요·CTA는 내용을 유지하되, 새 첫 줄과 어긋나는 문장만 고친다. ` +
           `채택 헤드카피를 그대로 베끼지 않는다.`;
         captionOut = await callClaude({
           model: MODELS.CAPTION,
@@ -418,9 +469,10 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
             instruction: alignInstruction,
             voice,
             concept,
+            lectureMap,
             carousel: content,
           }),
-          transcript: job.transcript_compressed,
+          transcript,
           maxTokens: 8000,
           step: '인스타 캡션 결 맞추기',
         });
@@ -455,19 +507,20 @@ export async function regenerateSecondary({ jobId }) {
 
   const voice = await loadVoice();
   const concept = await loadConcept(jobId);
+  const lectureMap = await ensureLectureMap(job);
   const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined, concept };
 
   console.log('캐러셀 기획 재생성 중...');
   let carousel = await callClaude({
     model: MODELS.CAROUSEL,
     system: COMMON_HEADER,
-    prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice }),
-    transcript: job.transcript_compressed,
+    prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice, lectureMap }),
+    transcript: job.transcript_full || job.transcript_compressed,
     maxTokens: 16000,
     step: '캐러셀 기획 재생성',
   });
   carousel = await finalizeCarousel({
-    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, label: '캐러셀 기획 재생성',
+    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, lectureMap, label: '캐러셀 기획 재생성',
   });
   await saveContent(jobId, 'carousel', carousel);
   console.log('캐러셀 기획 재생성 완료');

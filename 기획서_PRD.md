@@ -178,7 +178,7 @@ CREATE TABLE jobs (
 CREATE TABLE contents (
   id       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   job_id   uuid REFERENCES jobs(id),
-  type     text NOT NULL,  -- 'cafe' | 'caption' | 'carousel' | 'capture'
+  type     text NOT NULL,  -- 'cafe' | 'caption' | 'carousel' | 'capture' | 'concept' | 'lecture_map'
   content  text NOT NULL,
   version  int  DEFAULT 1,
   created_at timestamptz DEFAULT now()
@@ -237,4 +237,5 @@ PORT=3000
 - 섹션 생성 실패 시 해당 섹션만 재시도 가능, 전체 재시작 불필요.
 - `voice_profile` 갱신 전 타임스탬프 백업 자동 생성.
 - 글자수 기준: 카페 서머리 1,800~2,200자(제목 포함) / 인스타 캡션 1,000~1,300자 내외(해시태그 없음).
-- 캐러셀 10~14컷(공통 규칙 — 14컷 초과 금지, 개요 총 컷 수 = 실제 CUT 개수를 코드가 검증·보정. 수강생 모집형 역할 배치, 확장 구간에서 컷 수 조절), 캡쳐 가이드 5~8컷.
+- 캐러셀 10~14컷(공통 규칙 — 14컷 초과 금지, 개요 총 컷 수 = 실제 CUT 개수를 코드가 검증·보정. 역할 hook → promise → learn → bonus → solution → result → together → cta, 컷 수는 learn·bonus 구간에서 조절), 캡쳐 가이드 5~8컷.
+- 강의 지도(`lecture_map`): 4종보다 먼저 원본 자막 전체로 작업당 1회 생성·저장. 캡션·캐러셀은 지도 + 원본 자막으로 생성·수정·재생성(카페는 압축 자막).
