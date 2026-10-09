@@ -24,6 +24,7 @@ import {
   CAROUSEL_CUT_MAX,
 } from './prompts.js';
 import { saveJob, saveContent, getJob, getLatestContent } from './db.js';
+import { reviewCardCopy } from './copyedit.js';
 
 // 강의 지도 — 원본 자막 전체를 읽어 "이 강의가 어떤 강의인지"(강의 한 줄·주인공 배움·덤·결과물…)를 정리한 것.
 // 캡션·캐러셀의 첫 생성·수정·재생성이 전부 이 지도를 앞에 두고 쓴다. 작업당 한 번 만들고 contents에 저장한다
@@ -46,7 +47,7 @@ export async function ensureLectureMap(job) {
   const map = await callClaude({
     model: MODELS.CAROUSEL,
     system: COMMON_HEADER,
-    prompt: buildLectureMapPrompt({ topic: job.topic || undefined }),
+    prompt: buildLectureMapPrompt({ topic: job.topic || undefined, title: job.video_title || undefined }),
     transcript: job.transcript_full,
     maxTokens: 4000,
     step: '강의 파악',
@@ -116,6 +117,7 @@ export function normalizeCarouselCuts(content, label = '캐러셀 기획') {
 /**
  * 캐러셀 기획안 마무리 — 컷 수 검증·교정을 하고, 컷 수가 공통 규칙 밖이면 **한 번만** 모델에 되돌려 맞춘다.
  * (14컷 초과·10컷 미만은 카드 제작 자체가 막히므로 경고로 끝내지 않는다. 그래도 안 맞으면 경고와 함께 그대로 저장.)
+ * 그다음 카드 카피 교정(copyedit.js)을 한 번 거친다 — 수정(previous가 있을 때)이면 카드 텍스트가 바뀐 컷만.
  *
  * @param {object} o
  * @param {string} o.content 모델이 낸 기획안
@@ -128,7 +130,13 @@ export function normalizeCarouselCuts(content, label = '캐러셀 기획') {
  * @param {string} o.label 로그 접두어
  * @returns {Promise<string>} 최종 기획안
  */
-export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, lectureMap, label }) {
+export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, lectureMap, label, previous, instruction }) {
+  const fitted = await fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, label });
+  // 카드 텍스트는 캐러셀 공장이 그대로 카드에 찍는다 — 마지막 교정자 한 번(수정이면 바뀐 컷만)
+  return reviewCardCopy({ content: fitted, lectureMap, previous, instruction, label });
+}
+
+async function fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, label }) {
   let { content: fixed, count } = normalizeCarouselCuts(content, label);
   const inRange = (n) => n >= CAROUSEL_CUT_MIN && n <= CAROUSEL_CUT_MAX;
   if (count === 0 || inRange(count)) return fixed;
@@ -230,7 +238,13 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
     console.log(`${label} 생성 중...`);
     try {
       // 캡쳐 가이드는 카페 서머리의 "📷 캡쳐 n" 자리와 맞물려야 하므로, 앞서 생성된 카페 글을 넘긴다
-      const prompt = spec.type === 'capture' ? buildCapturePrompt({ cafe: results.cafe, concept }) : spec.prompt;
+      // 캐러셀은 먼저 쓴 캡션의 이야기를 장마다 끊어 보여준다(같은 게시물, 같은 줄거리) — 캡션 결과를 넘긴다
+      const prompt =
+        spec.type === 'capture'
+          ? buildCapturePrompt({ cafe: results.cafe, concept })
+          : spec.type === 'carousel'
+            ? buildCarouselPrompt({ voice, topic, concept, lectureMap, caption: results.caption })
+            : spec.prompt;
       let content = await callClaude({
         model: spec.model,
         system: COMMON_HEADER,
@@ -414,6 +428,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
   if (type === 'carousel') {
     content = await finalizeCarousel({
       content, job, voice, cafe: extra.cafe, caption: extra.caption, concept, lectureMap, label: `${label} 수정`,
+      previous: latest.content, instruction,
     });
   }
 
@@ -457,8 +472,8 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
       try {
         const alignInstruction =
           `짝꿍 캐러셀의 1컷 후크가 ${hookDesc}로 바뀌었다. 캡션의 첫 두 줄('…더 보기' 전)을 이 안과 같은 갈래·같은 소재·같은 감정으로 다시 쓰고, ` +
-          `바로 이어지는 "이 강의가 어떤 강의인지" 문단이 그 첫 줄을 자연스럽게 받게 손본다. ` +
-          `배움과 변화·자야쌤의 이야기·덤·한 강만으로 이만큼·같이 만들어요·CTA는 내용을 유지하되, 새 첫 줄과 어긋나는 문장만 고친다. ` +
+          `바로 이어지는 문단이 그 첫 줄을 자연스럽게 받게 손본다. 새 첫 줄이 꺼낸 이야기를 다음 문단들이 이어받도록 이야기 순서도 맞춘다. ` +
+          `자야쌤의 이야기·배움·덤·같이 만들어요·CTA의 내용은 유지하되, 새 첫 줄과 어긋나거나 이음새가 끊기는 문장만 고친다. ` +
           `채택 헤드카피를 그대로 베끼지 않는다.`;
         captionOut = await callClaude({
           model: MODELS.CAPTION,

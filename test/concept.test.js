@@ -55,6 +55,43 @@ test('캐러셀 프롬프트 — 새 역할 구조(문제는 1컷에만, 대상 
   for (const kind of prompts.HOOK_KINDS) assert.ok(p.includes(`▸ ${kind}`), `후크 갈래 ${kind} 설명이 없다`);
 });
 
+// 2026-10-09: 결과물이 "무서워하는 그 지퍼", "오늘 그 걱정", "이 한 강"처럼 영어 어순·번역투 조각이라 매번 손으로 고쳤고,
+// 헤드카피끼리·캡션 문단끼리 이어지지 않았다. 어순 규칙이 세 글에 실리는지, 프롬프트 속 좋은 예시(○)가 그 병을 갖지 않는지
+// (모델이 예시를 그대로 배운다), 캐러셀에 줄거리 단계가 있는지, 역할 이름표("한 강만으로 이만큼")가 카피로 샐 자리가 없는지 본다.
+const DEMONSTRATIVE = /(^|[\s"(])(그|이) [가-힣]|이게|그게|이거|그거|그걸|이걸/;
+test('우리말 어순 규칙 — 카페·캡션·캐러셀(첫 생성·수정)에 실리고, 좋은 예시(○)는 지시어 없는 온전한 문장이다', () => {
+  const RULE = '▸ 우리말 어순';
+  const built = {
+    cafe: prompts.buildCafePrompt({ voice }),
+    caption: prompts.buildCaptionPrompt({ voice }),
+    carousel: prompts.buildCarouselPrompt({ voice }),
+  };
+  for (const [type, p] of Object.entries(built)) {
+    assert.ok(p.includes(RULE), `${type}: 우리말 어순 규칙이 없다`);
+    assert.ok(prompts.buildRevisePrompt({ type, original: '원본', instruction: '고쳐', voice }).includes(RULE), `${type} 수정: 우리말 어순 규칙이 없다`);
+    for (const m of p.matchAll(/○ "([^"]+)"/g)) {
+      assert.ok(!DEMONSTRATIVE.test(m[1]), `${type}: 좋은 예시에 지시어가 남아 있다 — "${m[1]}"`);
+      assert.ok(/[요다죠까!?.~…)]$/.test(m[1].trim()), `${type}: 좋은 예시가 명사·어절로 끊긴다 — "${m[1]}"`);
+    }
+    assert.ok(!p.includes('한 강만으로'), `${type}: 역할 이름표 "한 강만으로 이만큼"이 남아 카피로 샐 수 있다`);
+  }
+  const map = prompts.buildLectureMapPrompt({ title: '기초정규반 3강 시보리' });
+  assert.ok(map.includes('- 수업 이름:'), '강의 지도에 수업 이름 항목이 없다');
+  assert.ok(map.includes('[영상 제목] 기초정규반 3강 시보리'), '강의 지도에 영상 제목이 실리지 않는다');
+});
+
+test('캐러셀 줄거리 — 개요에 줄거리 단계가 있고, 짝 캡션이 오면 같은 이야기를 따르게 싣는다', () => {
+  const p = prompts.buildCarouselPrompt({ voice });
+  assert.ok(p.includes('[줄거리 먼저'), '줄거리 단계 설명이 없다');
+  assert.ok(p.includes('- **줄거리**:'), '출력 형식에 줄거리 줄이 없다');
+  assert.ok(!p.includes('[짝 인스타 캡션 —'), '캡션이 없는데 빈 짝 캡션 블록이 들어갔다');
+  const CAP = '짝캡션테스트-지퍼에서-허리로-9b2e';
+  const withCap = prompts.buildCarouselPrompt({ voice, caption: CAP });
+  assert.ok(withCap.includes('[짝 인스타 캡션 —') && withCap.includes(CAP), '짝 캡션이 실리지 않는다');
+  // 캡션은 번호 칸(1)~7))으로 채우지 않는다
+  assert.ok(!/^1\) 첫 두 줄/m.test(prompts.buildCaptionPrompt({ voice })), '캡션이 아직 번호 칸 구성이다');
+});
+
 // ── 2. 실제 흐름 (generate.js) — 모델·비메오·보이스만 가짜 ─────────────
 const calls = []; // { step, prompt, transcript }
 mock.module('../src/anthropic.js', {
@@ -106,6 +143,10 @@ test('첫 생성 → 수정 → 재생성 전 구간에서 컨셉·강의 지도
     assert.ok(list.length >= 1, `${step} 호출이 없다`);
     assert.ok(list.every((c) => c.prompt.includes(CONCEPT)), `${step}: 첫 생성 프롬프트에 컨셉이 없다`);
   }
+  // 캐러셀 첫 생성은 먼저 쓴 캡션을 짝으로 받아 같은 줄거리를 따른다
+  const carouselFirst = calls.find((c) => c.step === `${L.carousel} 생성`);
+  assert.ok(carouselFirst.prompt.includes(`[짝 인스타 캡션 —`) && carouselFirst.prompt.includes(`가짜 결과 (${L.caption} 생성)`),
+    '캐러셀 첫 생성에 방금 쓴 캡션이 실리지 않는다');
   for (const type of ['caption', 'carousel']) {
     const c = calls.find((x) => x.step === `${L[type]} 생성`);
     assert.ok(c.prompt.includes(MAP_TEXT), `${type}: 첫 생성 프롬프트에 강의 지도가 없다`);
