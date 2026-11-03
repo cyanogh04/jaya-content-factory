@@ -6,6 +6,8 @@
 //   player.vimeo.com/video/{id}
 //   vimeo.com/share/{hash}...      (공유 링크 — oEmbed API로 실제 video_id 해석)
 
+import { formatTimestamp } from './timestamp.js';
+
 const VIMEO_API = 'https://api.vimeo.com';
 
 function requireToken(step) {
@@ -134,12 +136,7 @@ function vttTimeToSeconds(t) {
 }
 
 /** 초 → [MM:SS] (60분 초과 영상은 분이 60을 넘을 수 있음 — 총 분 표기 유지) */
-export function formatTimestamp(seconds) {
-  const total = Math.floor(seconds);
-  const mm = Math.floor(total / 60);
-  const ss = total % 60;
-  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-}
+export { formatTimestamp };
 
 /** WebVTT 파싱 → [{ start, text }] (HTML 태그 제거) */
 export function parseVtt(vtt) {

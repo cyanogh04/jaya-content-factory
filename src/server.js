@@ -1,6 +1,6 @@
 // src/server.js — Express 서버: 정적 파일 서빙 + API 5개 (SSE 스트리밍 포함)
 //
-// POST /api/generate    — { url, topic? } → SSE (progress × N → done)
+// POST /api/generate    — { url, topic?, concept? } 또는 강좌 { lectures: [{url}|{jobId}] ×2~4, name?, topic?, concept? } → SSE (progress × N → done)
 // POST /api/regenerate-all (SSE) — { jobId, concept } → 컨셉 기준으로 4종 전체 재기획
 // POST /api/revise      — { jobId, type, instruction } → { content, version, capture? }  (cafe 수정으로 📷 자리가 바뀌면 capture도 갱신해 돌려줌)
 // POST /api/regenerate  — { jobId } → { carousel, capture }
@@ -14,7 +14,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateAll, regenerateAll, revise, regenerateSecondary } from './generate.js';
+import { generateAll, generateCourse, regenerateAll, revise, regenerateSecondary, loadCourse } from './generate.js';
 import { learn as learnVoice } from './voice.js';
 import { exchangeToLongLived, autoRefreshIfNeeded } from './instagram.js';
 import { saveLectureToNotion } from './notion.js';
@@ -79,24 +79,35 @@ function openSSE(req, res) {
 
 /** generateAll/regenerateAll의 onProgress → SSE 이벤트 매핑 */
 const progressToSSE = (send) => (payload) => {
-  if (payload.type === 'job_created') send('start', { jobId: payload.jobId });
-  else send('progress', payload);
+  if (payload.type === 'job_created') send('start', { jobId: payload.jobId, course: payload.course || null });
+  else send('progress', payload); // { type: 'cafe'|…, content|error } 또는 { type: 'stage', stage, n?, label }
 };
 
 app.post('/api/generate', async (req, res) => {
-  const { url, topic, concept } = req.body || {};
-  if (!url || typeof url !== 'string' || !url.trim()) {
+  const { url, lectures, name, topic, concept } = req.body || {};
+  // 강좌: lectures 배열(강 순서대로, 각 항목은 { url } 또는 { jobId }). 강의 하나: url (또는 lectures 한 개)
+  const list = Array.isArray(lectures)
+    ? lectures.filter((l) => l && ((typeof l.url === 'string' && l.url.trim()) || l.jobId))
+    : [];
+  const singleUrl = list.length === 1 && list[0].url ? list[0].url : url;
+  if (list.length <= 1 && (!singleUrl || typeof singleUrl !== 'string' || !singleUrl.trim())) {
     return res.status(400).json({ error: '생성 요청: 비메오 URL을 입력하세요.' });
+  }
+  if (list.length === 1 && list[0].jobId && !list[0].url) {
+    return res.status(400).json({ error: '생성 요청: 지난 작업 하나만 고르면 새로 기획할 것이 없습니다 — 왼쪽 목록에서 그 작업을 열거나, 강을 더 묶어 주세요.' });
   }
 
   const { send, isGone } = openSSE(req, res);
   try {
-    const { jobId } = await generateAll({
-      url: url.trim(),
+    const common = {
       topic: (topic || '').trim() || undefined,
       concept: (concept || '').trim() || undefined,
       onProgress: progressToSSE(send),
-    });
+    };
+    const { jobId } =
+      list.length >= 2
+        ? await generateCourse({ lectures: list, name: (name || '').trim() || undefined, ...common })
+        : await generateAll({ url: singleUrl.trim(), ...common });
     send('done', { jobId });
   } catch (err) {
     // 자막 수집 실패, 보이스 프로파일 없음 등 — 생성 시작 전 치명 오류
@@ -346,9 +357,10 @@ app.get('/api/job/:id', async (req, res) => {
       return res.status(404).json({ error: `작업 조회: 작업(${req.params.id})을 찾을 수 없습니다.` });
     }
     const contents = await getContents(req.params.id);
+    const course = (await loadCourse(req.params.id)) || null; // 강좌 작업이면 구성(강 목록)
     // 자막 원문은 응답이 너무 커지므로 제외
     const { transcript_compressed, transcript_full, ...jobLite } = job;
-    res.json({ job: jobLite, contents });
+    res.json({ job: jobLite, contents, course });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: err.message });

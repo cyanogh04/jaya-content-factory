@@ -88,7 +88,7 @@ export async function listJobs(limit = 50) {
       .order('created_at', { ascending: false })
       .limit(limit);
     if (error) throw new Error(`${step}: Supabase 오류 — ${error.message}`);
-    return data || [];
+    return (data || []).map(withKind);
   }
   // 파일 폴백
   let entries;
@@ -103,10 +103,52 @@ export async function listJobs(limit = 50) {
     const job = await readJsonSafe(path.join(OUTPUTS_DIR, entry.name, 'job.json'));
     if (!job) continue;
     const { transcript_compressed, transcript_full, ...lite } = job;
-    jobs.push(lite);
+    jobs.push(withKind(lite));
   }
   jobs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   return jobs.slice(0, limit);
+}
+
+/** 목록용 — 강좌 작업(video_id 'course-…')인지와 강 수(vimeo_url의 줄 수)를 붙인다 */
+function withKind(job) {
+  const isCourse = typeof job.video_id === 'string' && job.video_id.startsWith('course-');
+  const lectureCount = isCourse ? String(job.vimeo_url || '').split('\n').filter(Boolean).length : 1;
+  return { ...job, kind: isCourse ? 'course' : 'lecture', lecture_count: lectureCount };
+}
+
+/**
+ * 같은 영상으로 만든 가장 최근 작업(자막이 저장된 것) — 강좌 묶기에서 이미 수집한 자막을 다시 받지 않으려고 쓴다.
+ * 없으면 null.
+ */
+export async function findJobByVideoId(videoId) {
+  const step = 'DB 조회(video_id)';
+  if (!videoId) return null;
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('jobs')
+      .select('*')
+      .eq('video_id', String(videoId))
+      .not('transcript_full', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(`${step}: Supabase 오류 — ${error.message}`);
+    return data;
+  }
+  let entries;
+  try {
+    entries = await fs.readdir(OUTPUTS_DIR, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  let best = null;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const job = await readJsonSafe(path.join(OUTPUTS_DIR, entry.name, 'job.json'));
+    if (!job || String(job.video_id) !== String(videoId) || !job.transcript_full) continue;
+    if (!best || new Date(job.created_at) > new Date(best.created_at)) best = job;
+  }
+  return best;
 }
 
 /** jobId로 작업 조회 (없으면 null) */

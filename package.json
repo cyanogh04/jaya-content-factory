@@ -10,7 +10,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "learn-voice": "node src/voice.js",
-    "test": "node --test --experimental-test-module-mocks test/*.test.js"
+    "test": "node --test --experimental-test-module-mocks test/*.test.js",
+    "dev:mock": "node --experimental-test-module-mocks test/mock-server.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

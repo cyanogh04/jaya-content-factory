@@ -243,7 +243,7 @@ const NATURAL_KOREAN = `[자연스러운 한국어 — AI가 쓴 티를 없앤�
  * 화자는 자야쌤이 아니라 카페 매니저 '디바'다. 자야쌤 곁에서 수업과 라이브를 다 보는 사람이라
  * 어조는 자야쌤과 같은 온도지만, 자야쌤을 3인칭으로 부르고 "자야쌤이 이번에…"로 전한다.
  */
-const CAFE_STYLE = `[카페 글의 화자와 결 — 반드시 지킨다]
+const CAFE_STYLE = (course) => `[카페 글의 화자와 결 — 반드시 지킨다]
 ▸ 화자: 이 글을 올리는 사람은 자야쌤이 아니라 **디자인드바이 카페 매니저 '디바'**다.
 - 자야쌤을 3인칭으로 부른다: "자야쌤이 이번 강의에서…", "자야쌤 수업에선 이런 따라하기식 말은 없어요".
 - 디바는 자야쌤의 수업·라이브·공구 준비를 곁에서 다 보는 사람이다. 그래서 "옆에서 보니까…", "이번 강의 편집하면서
@@ -294,8 +294,13 @@ const CAFE_STYLE = `[카페 글의 화자와 결 — 반드시 지킨다]
 - 자야쌤이 강의에서 말한 수치(몇 cm, 몇 수, 몇 겹)는 오답 지우기용으로 쓰더라도 정답 수치는 남기지 않는다.
 
 ▸ 분량
-- 문장마다 줄을 바꾸는 결이라 짧아지기 쉽다. 공백 포함 **1,800~2,200자**를 맞춘다. 부족하면 문단을 더 쪼개지 말고
+- 문장마다 줄을 바꾸는 결이라 짧아지기 쉽다. 공백 포함 **${cafeLength(course)}자**를 맞춘다. 부족하면 문단을 더 쪼개지 말고
   강의 속 장면(디바가 옆에서 본 시선)과 자문자답 줄을 하나 더 늘린다.`;
+
+/** 카페 글 분량 — 강좌 글은 강별 안내가 들어가므로 더 길다 */
+export function cafeLength(course) {
+  return course ? '2,200~2,800' : '1,800~2,200';
+}
 
 // ─────────────────────────────────────────────
 // 1. 말투 분석 → 보이스 프로파일 (learn-voice)
@@ -323,12 +328,13 @@ ${joined}`;
 // ─────────────────────────────────────────────
 // 2. 네이버 카페 서머리 (voice 적용)
 // ─────────────────────────────────────────────
-export function buildCafePrompt({ voice, topic, concept }) {
+export function buildCafePrompt({ voice, topic, concept, course, lectureMap }) {
   return `${voiceBlock(voice)}
 (위 예시는 자야쌤의 인스타 캡션이다. 어휘·리듬·습관만 가져오고, 인스타식 이모지 밀도와 1인칭 화자는 아래 [카페 글의 화자와 결]로 바꾼다.)
 
-${CAFE_STYLE}
+${CAFE_STYLE(course)}
 
+${course ? lectureMapBlock(lectureMap) : ''}${courseBlock(course, 'cafe')}
 ${conceptBlock(concept)}
 ${BRAND_GOAL}
 
@@ -347,23 +353,23 @@ ${NATURAL_KOREAN}
 [작업] 위 [강의 자막]을 바탕으로 디바가 네이버 카페에 바로 올릴 강의 서머리를 쓴다.
 구성(소제목을 달지 말고 카페 글답게 흐르게):
 1) 제목 줄 (검색어 포함, 위 제목 규칙)
-2) 디바 인사 + 자야쌤이 이번에 어떤 강의를 올렸는지 한두 줄
+2) 디바 인사 + 자야쌤이 이번에 어떤 강의를 올렸는지 한두 줄${course ? '\n2-1) 강별로 배우는 내용 — 위 [강좌]의 형식대로 강마다 두 줄, 1강부터 빠짐없이' : ''}
 3) 독자 공감 — 독자가 실제로 하는 말을 따옴표로 인용하거나 "미싱? 재단? 패턴?" 식 퀴즈로 던진다
 4) 진단 — 왜 그렇게 되는지. 통념을 인정했다가 뒤집는 자문자답 1~2개 (AI 인용 문단이 여기서 나온다)
 5) 강의 속 장면 — 자야쌤이 어디까지 짚어주는지, 옆에서 본 사람의 시선으로. 방법은 이름만
 6) 자문자답 줄 1~2개 — "청자켓 수업, 초보도 들을 수 있나요?" / "○○만 알면 되는 거 아니에요?" 등. 자막에서 답할 수 있는 것만
 7) 수강 CTA — 글에서 짚은 고민에 맞춘 권유 두세 줄 + 마지막 줄 "[소잉클래스 수강 신청하기]http://www.sewingclass.co.kr". 일정·가격은 지어내지 않는다
-**글자수는 1,800~2,200자(공백 포함)**로 맞춘다. 제목 줄부터 본문 끝까지, 완성된 게시글만 출력한다(설명·머리말 없이).
+**글자수는 ${cafeLength(course)}자(공백 포함)**로 맞춘다. 제목 줄부터 본문 끝까지, 완성된 게시글만 출력한다(설명·머리말 없이).
 ${topicLine(topic)}`;
 }
 
 // ─────────────────────────────────────────────
 // 3. 캡쳐 가이드 (타임스탬프 기반 — 원본 자막 사용)
 // ─────────────────────────────────────────────
-export function buildCapturePrompt({ cafe, concept } = {}) {
-  const conceptPart = concept
+export function buildCapturePrompt({ cafe, concept, course, lectureMap } = {}) {
+  const conceptPart = (course ? `${lectureMapBlock(lectureMap)}${courseBlock(course, 'capture')}\n` : '') + (concept
     ? `${conceptBlock(concept)}(캡쳐 가이드에서는 이 컨셉이 강조하는 장면을 "카드뉴스" 용도 컷으로 우선 고른다.)\n\n`
-    : '';
+    : '');
   const cafeBlock = cafe
     ? `[카페 서머리 — 아래 글의 "📷 캡쳐 n [MM:SS] …" 줄이 이미지가 들어갈 자리다]
 ${cafe}
@@ -435,6 +441,98 @@ ${m}
 }
 
 // ─────────────────────────────────────────────
+// 3-1. 강좌(여러 강 묶음) — 강좌 지도 + 4종 공용 강좌 블록
+//
+// 2026-11-04: 강의는 보통 3~4강으로 올라가는데 작업은 영상 하나씩이라 "1강에서 배우는 것 / 2강에서 …"를 한눈에 보여 주는
+// 소개글도, 강좌 전체를 알고 쓰는 캐러셀·캡션도 만들 수 없었다(1강만 보면 재단·쌈솔이 주인공이 되고, 수강생이 사는 건
+// "크롭 데님 자켓을 만드는 수업"이다). 강좌 작업은 강마다 강의 지도를 만든 뒤 그 위에 '강좌 지도'를 한 층 더 쌓고,
+// 4종은 강좌 지도 + 강좌 자막(강마다 30초 한 줄, 시각에 회차 "[n강 MM:SS]")을 받는다.
+// 강좌 지도는 contents의 'lecture_map' 타입으로 저장돼 기존 코드가 강의 지도와 같은 자리에 싣는다.
+// ─────────────────────────────────────────────
+
+/** 강좌 지도 — 강별 강의 지도 n개 + 강좌 자막(캐시 블록)을 읽고 강좌 전체의 정체를 정리한다 */
+export function buildCourseMapPrompt({ name, lectures }) {
+  const maps = (lectures || [])
+    .map((l) => `--- ${l.n}강 · ${l.title || '제목 없음'} — 강의 지도 ---\n${(l.map || '').trim() || '(지도 없음)'}`)
+    .join('\n\n');
+  const list = (lectures || []).map((l) => `${l.n}강 ${l.title || ''}`.trim()).join(' / ');
+  return `[작업] 아래는 강좌 "${name}"(${lectures.length}강: ${list})의 **강별 강의 지도**와, 위 [강의 자막](강마다 30초에 한 줄로 압축한
+강좌 전체 자막 — 줄마다 "[n강 MM:SS]"로 회차가 붙어 있다)이다. 둘을 읽고 **강좌 하나**가 어떤 수업인지 아래 형식으로 정리한다.
+이건 홍보 글이 아니라 **사실 정리**다. 뒤에 오는 카페·캡션·캐러셀 작업자가 이 지도만 보고도 "이 강좌의 정체"와
+"강마다 무엇을 배우는지"를 틀리지 않게 잡는 것이 목적이다. 자막·강별 지도에 없는 것은 쓰지 않는다.
+
+[판단 기준]
+- 강좌의 '주인공 배움'은 **강좌 전체**에서 가장 큰 덩어리다 — 보통 '어떤 옷을 어디서부터 어디까지 완성하는가'와 그 길에서
+  여러 강에 걸쳐 반복되는 핵심 원리다. 한 강에서만 스친 소재는 그 강의 '강별 배움'에는 적되 강좌의 주인공으로 올리지 않는다.
+- '덤'은 강좌의 주제는 아니지만 어느 강에서든 배우게 되는 것 — 강별 지도의 덤을 모으되 같은 이름은 한 번만.
+- 시각은 **반드시 회차와 함께 "[n강 MM:SS]"**로 적는다. 자막에 실제로 찍힌 것만 쓴다.
+
+[출력 형식 — 아래 항목명을 그대로 쓰고, 항목당 지시된 분량을 넘기지 않는다. 설명·머리말 없이 목록만]
+- 수업 이름: 캡션·카드가 "이 수업" 대신 부를 이름. 강좌 이름 "${name}"을 글자 그대로 써 "자야쌤의 ${name} 수업"처럼. 지어내지 않는다
+- 강의 한 줄: 이 강좌는 (무엇을 만들거나 다루며) (1강 어디서부터 ${lectures.length}강 어디까지) 배우는 수업이다 — 한 문장
+- 강별 배움: 강마다 한 줄씩, 1강부터 빠짐없이 — "n강 — (그 강에서 배우는 것 한두 문장. 방법은 이름만, 수치·순서는 적지 않는다)"
+- 전체 흐름: 1강에서 ${lectures.length}강까지 옷(또는 결과물)이 어떻게 만들어져 가는지 — 2~3줄, 강 순서대로
+- 주인공 배움: 강좌의 중심 축 2~3개. 각각 "이름 — 왜 이것이 중심인지(어느 강들에 걸쳐·반복 강조·강좌 목적) 한 줄"
+- 덤: 곁가지로 배우게 되는 것 0~5개. 각각 "이름 — 어느 강 어느 대목에서 한 줄 [n강 MM:SS]". 없으면 "없음"
+- 다 듣고 나면: 강좌를 다 듣고 수강생 손에 남는 결과물, 또는 할 수 있게 되는 것 — 1~2줄
+- 수강생의 말·실패 장면: 자막에 나온 수강생 질문·자야쌤이 전한 흔한 실패 3~4개, 원문에 가깝게 [n강 MM:SS]
+- 자야쌤의 '왜': 강좌에서 밝힌 원리·이유 중 가장 센 것 3~4개 — 원인·오답 지우기·해법의 이름까지만, 수치·순서·실행 지시는 적지 않는다 [n강 MM:SS]
+- 자야쌤의 이야기: 경험담·시행착오·가르치며 본 사례 중 인용할 만한 것 2~3개 [n강 MM:SS]. 없으면 "없음"
+- 장면 후보: 화면에 무엇이 보이는지 8~12개 "[n강 MM:SS] 장면 한 줄" — 여러 강에 고루, 전후 대비·완성 장면을 꼭 넣는다
+- 검색어 후보: 이 강좌를 찾을 사람이 검색창에 칠 말 3~5개 (자막에 실제 나온 용어 우선)
+
+[강별 강의 지도]
+${maps}`;
+}
+
+/**
+ * 강좌 블록 — 강좌 작업의 4종(카페·캡션·캐러셀·캡쳐)과 수정·재생성 프롬프트에 싣는다. 강좌가 아니면 빈 문자열.
+ * @param {{ name: string, lectures: Array<{ n: number, title?: string, duration?: number }> }} [course]
+ * @param {'cafe'|'caption'|'carousel'|'capture'} type
+ */
+export function courseBlock(course, type) {
+  if (!course || !Array.isArray(course.lectures) || course.lectures.length === 0) return '';
+  const n = course.lectures.length;
+  const list = course.lectures
+    .map((l) => `  ${l.n}강 ${l.title || '제목 없음'}${l.duration ? ` (${Math.round(l.duration / 60)}분)` : ''}`)
+    .join('\n');
+  const byType = {
+    cafe: `
+▸ 강별로 배우는 내용 — 강좌 글에는 반드시 넣는다
+- 디바 인사와 "자야쌤이 이번에 어떤 강좌를 올렸는지" 뒤, 독자 공감 앞에 강마다 무엇을 배우는지 한눈에 보이는 안내를 둔다.
+  형식(강마다 두 줄, 강 사이는 빈 줄 없이):
+  ✔️ 1강 (강 제목을 글자 그대로)
+  (그 강에서 배우는 것 한두 문장 — 위 [강의 지도]의 '강별 배움'. 방법은 이름만, 수치·순서·실행 지시는 적지 않는다)
+- 1강부터 ${n}강까지 빠짐없이 순서대로. 안내 뒤에는 강좌 전체를 다 들으면 어떤 옷이 손에 남는지('전체 흐름'·'다 듣고 나면')를 한두 줄로 잇는다.
+- 📷 캡쳐 자리는 여러 강에 걸쳐 고른다 — 한 강에만 몰지 않는다. 시각은 "[n강 MM:SS]".
+- 분량은 ${cafeLength(course)}자(공백 포함) — 강별 안내가 들어가는 만큼 단일 강의 글보다 길다.`,
+    caption: `
+▸ 캡션은 강좌 하나를 소개한다. "어떤 강의인지"는 지도의 '강의 한 줄'과 '전체 흐름'(1강에서 ${n}강까지 옷이 만들어져 가는 길)로 말한다.
+  강을 하나씩 목차처럼 훑지("1강에서는… 2강에서는…") 않는다 — 배움과 달라짐을 이야기로 잇고, 회차는 필요한 자리에서만 자연스럽게 스친다.`,
+    carousel: `
+▸ 강좌 캐러셀
+- 후크·promise·result의 소재는 강좌 전체의 정체(지도의 '강의 한 줄'·'주인공 배움'·'다 듣고 나면')에서 고른다. 한 강의 소재로 강좌를 대표하지 않는다.
+- learn 컷의 줄거리는 1강에서 ${n}강으로 옷이 만들어져 가는 순서를 따라가면 자연스럽다. 단, "1강에서는 ○○을 배워요"처럼 회차 소개가
+  헤드카피가 되면 목차가 된다 — 헤드카피는 배움과 달라짐을 말하고, 회차는 서브카피나 본문에서 스치듯만.
+- solution 목록은 강좌 전체에서 배우는 것을 모은다(강마다 하나씩이 아니라 줄거리에 나온 순서대로).
+- 실사캡쳐 시각은 "실사캡쳐[n강 MM:SS]".`,
+    capture: `
+▸ 강좌 캡쳐 가이드
+- 모든 시각은 "[n강 MM:SS]"로 적고, 카페 글의 📷 자리 시각도 회차째 그대로 옮긴다.
+- 카드뉴스용 추가 컷은 여러 강에 고루 — 특히 완성 장면·전후 대비는 마지막 강에서 찾는다.`,
+  };
+  return `[강좌 — 이번 작업은 영상 하나가 아니라 강좌 전체(${n}강)다. 글은 강좌 하나를 소개한다]
+강좌 이름: ${course.name}
+${list}
+- 수업은 지도의 '수업 이름'(강좌 이름 기준)으로 부른다. 특정 강만의 수업처럼 쓰지 않는다.
+- 위 [강의 자막]은 강마다 30초에 한 줄만 남긴 압축본이고, 줄마다 "[n강 MM:SS]"로 회차가 붙어 있다.
+  강좌의 정체·전체 흐름·강별 배움은 [강의 지도](강좌 지도)가 쥐고 있다 — 자막은 근거·장면·자야쌤의 표현을 찾는 데 쓴다.
+- 시각은 반드시 회차와 함께 "[n강 MM:SS]"로 적는다. 회차 없는 "[MM:SS]"는 어느 강인지 알 수 없어 쓰지 않는다. 자막에 실제 찍힌 시각만.
+- 주인공 배움·결과물은 강좌 전체 기준이다. 한 강에서 스친 소재를 강좌의 중심처럼 쓰지 않는다.${byType[type] || ''}
+`;
+}
+
+// ─────────────────────────────────────────────
 // 4. 인스타 캐러셀 기획 (10~14컷 — 한 편의 큰 이야기)
 //
 // 2026-09-09 전면 재설계. 이전 구조(hook → empathy → audience → turn → … → objection → urgency → cta)는
@@ -468,7 +566,7 @@ ${c}
 `;
 }
 
-export function buildCarouselPrompt({ voice, topic, concept, lectureMap, caption }) {
+export function buildCarouselPrompt({ voice, topic, concept, lectureMap, caption, course }) {
   return `[말투 참고] 카드에 올라가는 카피(헤드·서브·본문)는 아래 보이스 프로파일의 목소리를 살린다.
 카드 카피는 짧지만 **짧아도 온전한 우리말 문장**이다 — 자야쌤이 수강생 앞에서 소리 내어 하는 말처럼. 이모지·말줄임표 남발은 절제한다.
 '짓다'는 동사로 활용하지 않는다("지어요/지어보세요/짓기 위한" 금지). 옷은 "만들어요". 철학 문구 인용 1회만 예외.
@@ -476,7 +574,7 @@ export function buildCarouselPrompt({ voice, topic, concept, lectureMap, caption
 ${voiceSummary(voice)}
 
 ${lectureMapBlock(lectureMap)}
-${captionPairBlock(caption)}
+${courseBlock(course, 'carousel')}${captionPairBlock(caption)}
 ${conceptBlock(concept)}
 ${BRAND_GOAL}
 
@@ -765,10 +863,11 @@ ${plan}`;
 // ─────────────────────────────────────────────
 const CAPTION_FLOW = `첫 두 줄 후크에서 시작해, 원인과 결과로 이어지는 한 편의 이야기(어떤 강의인지 → 막히는 자리와 그 이유 → 수업에서 배우는 것 → 그래서 달라지는 것 → … → 손에 남는 옷 → 같이 하자 → CTA)`;
 
-export function buildCaptionPrompt({ voice, topic, concept, lectureMap }) {
+export function buildCaptionPrompt({ voice, topic, concept, lectureMap, course }) {
   return `${voiceBlock(voice)}
 
 ${lectureMapBlock(lectureMap)}
+${courseBlock(course, 'caption')}
 ${conceptBlock(concept)}
 ${BRAND_GOAL}
 
@@ -850,9 +949,9 @@ ${topicLine(topic)}`;
 // ─────────────────────────────────────────────
 // 수정(revise) — 카페 서머리 / 인스타 캡션 / 캐러셀 기획
 // ─────────────────────────────────────────────
-export function buildRevisePrompt({ type, original, instruction, voice, topic, concept, cafe, caption, carousel, lectureMap }) {
+export function buildRevisePrompt({ type, original, instruction, voice, topic, concept, cafe, caption, carousel, lectureMap, course }) {
   if (type === 'carousel') {
-    return buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption, lectureMap });
+    return buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption, lectureMap, course });
   }
   const label = TYPE_LABELS[type];
   // 캡션 수정에 짝꿍 캐러셀 기획안이 딸려 오면(후크 안 교체 뒤 캡션 맞추기) — 같은 게시물의 카드와 결을 맞춘다
@@ -872,17 +971,19 @@ ${carousel}
       : '';
   const rules =
     type === 'cafe'
-      ? '**글자수는 1,800~2,200자(공백 포함)**를 유지한다. 첫 줄은 게시글 제목이고, 화자는 카페 매니저 디바(자야쌤은 3인칭)라는 점을 유지한다.\n' +
-        '문장마다 줄바꿈하는 카페 글의 결과 자문자답 줄, "📷 캡쳐 n [MM:SS] …" 자리표시 줄(3~5곳, 자막의 실제 시각)도 유지하고, 마지막 줄은 [소잉클래스 수강 신청하기]http://www.sewingclass.co.kr 로 끝낸다. 마크다운 기호는 쓰지 않는다.'
+      ? `**글자수는 ${cafeLength(course)}자(공백 포함)**를 유지한다. 첫 줄은 게시글 제목이고, 화자는 카페 매니저 디바(자야쌤은 3인칭)라는 점을 유지한다.\n` +
+        `문장마다 줄바꿈하는 카페 글의 결과 자문자답 줄, "📷 캡쳐 n [${course ? 'n강 ' : ''}MM:SS] …" 자리표시 줄(3~5곳, 자막의 실제 시각)도 유지하고, 마지막 줄은 [소잉클래스 수강 신청하기]http://www.sewingclass.co.kr 로 끝낸다. 마크다운 기호는 쓰지 않는다.` +
+        (course ? ' 강별로 배우는 내용 안내(✔️ n강 줄)는 강 수만큼 그대로 유지한다.' : '')
       : '**본문은 1,000~1,300자 내외**를 유지한다. 해시태그(#)는 쓰지 않으며, 수정 지시에서 해시태그를 요구해도\n' +
         '본문에 검색어를 스며들게 하는 방식으로 대신한다. 수강생 닉네임·실명은 첫 글자 + ** 형태(예: 자**님)를 유지한다.\n' +
         `이야기 흐름(${CAPTION_FLOW})을 유지한다 — 고친 문단도 앞 문단을 받고 뒤 문단이 받게 이음새까지 맞춘다.\n` +
         '첫 두 줄 뒤에 문제를 다시 파는 문단, "이런 분이라면" 대상 목록, 손실 회피 협박, 강의 순서대로 훑는 글로 되돌리지 않는다.';
-  const styleBlock = type === 'cafe' ? `\n${CAFE_STYLE}\n` : '';
-  const mapBlock = type === 'caption' ? lectureMapBlock(lectureMap) : '';
+  const styleBlock = type === 'cafe' ? `\n${CAFE_STYLE(course)}\n` : '';
+  const mapBlock = type === 'caption' || course ? lectureMapBlock(lectureMap) : '';
   return `${voiceBlock(voice)}
 ${styleBlock}
 ${mapBlock}
+${courseBlock(course, type)}
 ${conceptBlock(concept)}
 ${BRAND_GOAL}
 ${pairBlock}
@@ -909,7 +1010,7 @@ ${instruction}`;
 // 캐러셀 기획 수정 — 규칙·출력 형식은 원본 프롬프트를 그대로 싣고, 그 위에 '기존 기획안을 어떻게 고칠지'만 덧붙인다.
 // 가장 흔한 지시는 후크 안 교체("B안으로")다. 이때 1컷만 바꾸면 열린 고리·감정 곡선이 어긋나므로
 // 연결된 부분까지 함께 맞추게 하고, 반대로 바꿀 이유 없는 컷은 건드리지 않게 한다.
-function buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption, lectureMap }) {
+function buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption, lectureMap, course }) {
   const context =
     cafe && caption
       ? `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캐러셀은 이 내용과 메시지·표현이 일관되어야 한다.
@@ -922,7 +1023,7 @@ ${caption}
 `
       : '';
 
-  return `${context}${buildCarouselPrompt({ voice, topic, concept, lectureMap })}
+  return `${context}${buildCarouselPrompt({ voice, topic, concept, lectureMap, course })}
 
 [수정 작업 — 위 규칙과 출력 형식을 그대로 지키면서, 아래 [기존 기획안]을 [수정 지시]대로 고쳐 기획안 전체를 다시 출력한다]
 ▸ 후크 안을 바꾸라는 지시(예: "B안으로 다시 기획")일 때
@@ -960,7 +1061,7 @@ ${instruction}`;
 // ─────────────────────────────────────────────
 // 재생성(regenerate) — 확정된 카페·캡션 기반으로 캐러셀·캡쳐 재생성
 // ─────────────────────────────────────────────
-export function buildRegeneratePrompt({ type, cafe, caption, topic, concept, voice, lectureMap }) {
+export function buildRegeneratePrompt({ type, cafe, caption, topic, concept, voice, lectureMap, course }) {
   const context = `[확정된 카페 서머리]
 ${cafe}
 
@@ -971,13 +1072,13 @@ ${caption}`;
     return `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캐러셀은 이 내용과 메시지·표현이 일관되어야 한다.
 ${context}
 
-${buildCarouselPrompt({ voice, topic, concept, lectureMap })}`;
+${buildCarouselPrompt({ voice, topic, concept, lectureMap, course })}`;
   }
   if (type === 'capture') {
     return `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캡쳐 시점은 이 내용에서 강조된 장면을 우선 반영한다.
 ${context}
 
-${buildCapturePrompt({ cafe, concept })}`;
+${buildCapturePrompt({ cafe, concept, course, lectureMap })}`;
   }
   throw new Error(`프롬프트 조립: 재생성 대상이 아닌 타입입니다 — ${type}`);
 }

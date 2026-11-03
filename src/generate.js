@@ -1,6 +1,7 @@
 // src/generate.js — 4종 순차 생성 오케스트레이션 + 수정(revise: cafe·caption·carousel) + 재생성(regenerateSecondary)
 //
-// 생성 순서: (강의 지도) → cafe → caption → carousel → capture
+// 생성 순서: (강의 지도 — 강좌면 강별 지도 → 강좌 지도) → cafe → caption → carousel → capture
+// 강좌(2~4강 묶음, generateCourse): 강마다 자막 작업 행을 두고, 강좌 행은 강마다 30초 한 줄로 압축한 강좌 자막을 두 칸(compressed·full)에 같이 둔다.
 // 자막 사용: cafe → compressed / 강의 지도·caption·carousel·capture → full
 //   (2026-09-09: 캡션·캐러셀도 원본 자막을 받는다. 60분 넘는 강의는 압축본이 30초에 한 줄이라
 //    강의가 무엇인지 알 수 없었고, 그게 "바지 수업에 오버록 후크"의 뿌리였다. 캡션·캐러셀·캡쳐가 같은
@@ -9,6 +10,7 @@
 
 import { callClaude, MODELS } from './anthropic.js';
 import { getTranscript } from './vimeo.js';
+import * as vimeo from './vimeo.js'; // resolveVideoId — 테스트의 가짜 vimeo.js에 없어도 링크 오류가 나지 않게 네임스페이스로
 import { load as loadVoice } from './voice.js';
 import {
   COMMON_HEADER,
@@ -18,13 +20,23 @@ import {
   buildCarouselPrompt,
   buildCapturePrompt,
   buildLectureMapPrompt,
+  buildCourseMapPrompt,
   buildRevisePrompt,
   buildRegeneratePrompt,
   CAROUSEL_CUT_MIN,
   CAROUSEL_CUT_MAX,
 } from './prompts.js';
-import { saveJob, saveContent, getJob, getLatestContent } from './db.js';
+import { saveJob, saveContent, getJob, getLatestContent, findJobByVideoId } from './db.js';
 import { reviewCardCopy } from './copyedit.js';
+import {
+  COURSE_TYPE,
+  COURSE_MAX_LECTURES,
+  isCourseJob,
+  parseCourse,
+  deriveCourseName,
+  buildCourseTranscript,
+  newCourseVideoId,
+} from './course.js';
 
 // 강의 지도 — 원본 자막 전체를 읽어 "이 강의가 어떤 강의인지"(강의 한 줄·주인공 배움·덤·결과물…)를 정리한 것.
 // 캡션·캐러셀의 첫 생성·수정·재생성이 전부 이 지도를 앞에 두고 쓴다. 작업당 한 번 만들고 contents에 저장한다
@@ -38,10 +50,17 @@ export async function loadLectureMap(jobId) {
   return text || undefined;
 }
 
-/** 강의 지도를 읽고, 없으면 원본 자막으로 만들어 저장한 뒤 돌려준다 */
-export async function ensureLectureMap(job) {
+/**
+ * 강의 지도를 읽고, 없으면 원본 자막으로 만들어 저장한 뒤 돌려준다.
+ * 강좌 작업이면 강별 지도(강 작업마다 1회)를 먼저 갖춘 뒤 그 위에 '강좌 지도'를 만들어 같은 타입으로 저장한다 —
+ * 4종·수정·재생성은 강의 지도 자리에 강좌 지도를 그대로 받는다.
+ * @param {object} job
+ * @param {(payload: object) => void} [onProgress] 단계 알림(강별 지도·강좌 지도)
+ */
+export async function ensureLectureMap(job, onProgress = () => {}) {
   const saved = await loadLectureMap(job.id);
   if (saved) return saved;
+  if (isCourseJob(job)) return buildCourseMap(job, onProgress);
   if (!job.transcript_full) throw new Error('강의 파악: 이 작업에는 저장된 원본 자막이 없습니다.');
   console.log('강의 파악 중... (원본 자막 전체를 읽어 강의 지도 작성)');
   const map = await callClaude({
@@ -54,6 +73,39 @@ export async function ensureLectureMap(job) {
   });
   await saveContent(job.id, LECTURE_MAP_TYPE, map);
   console.log(`강의 파악 완료 (${map.length}자)`);
+  return map;
+}
+
+/** 강좌 작업의 구성(contents 'course' 타입, JSON) — 강좌가 아니면 undefined */
+export async function loadCourse(jobId) {
+  const row = await getLatestContent(jobId, COURSE_TYPE);
+  return row ? parseCourse(row.content) : undefined;
+}
+
+/** 강좌 지도 — 강별 강의 지도를 갖춘 뒤(없는 강은 여기서 만든다) 강좌 자막과 함께 읽어 강좌 전체를 정리하고 저장한다 */
+async function buildCourseMap(job, onProgress) {
+  const course = await loadCourse(job.id);
+  if (!course) throw new Error('강좌 파악: 이 작업의 강좌 구성(course)이 저장돼 있지 않습니다.');
+  const lectures = [];
+  for (const lec of course.lectures) {
+    const child = await getJob(lec.jobId);
+    if (!child) throw new Error(`강좌 파악: ${lec.n}강 작업(${lec.jobId})을 찾을 수 없습니다.`);
+    onProgress({ type: 'stage', stage: 'lecture_map', n: lec.n, label: `${lec.n}강 강의 지도` });
+    const map = await ensureLectureMap(child);
+    lectures.push({ n: lec.n, title: lec.title, map });
+  }
+  onProgress({ type: 'stage', stage: 'course_map', label: '강좌 지도' });
+  console.log(`강좌 파악 중... (강별 지도 ${lectures.length}개 + 강좌 자막으로 강좌 지도 작성)`);
+  const map = await callClaude({
+    model: MODELS.CAROUSEL,
+    system: COMMON_HEADER,
+    prompt: buildCourseMapPrompt({ name: course.name, lectures }),
+    transcript: job.transcript_full,
+    maxTokens: 6000,
+    step: '강좌 파악',
+  });
+  await saveContent(job.id, LECTURE_MAP_TYPE, map);
+  console.log(`강좌 파악 완료 (${map.length}자)`);
   return map;
 }
 
@@ -130,13 +182,13 @@ export function normalizeCarouselCuts(content, label = '캐러셀 기획') {
  * @param {string} o.label 로그 접두어
  * @returns {Promise<string>} 최종 기획안
  */
-export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, lectureMap, label, previous, instruction }) {
-  const fitted = await fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, label });
+export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, lectureMap, course, label, previous, instruction }) {
+  const fitted = await fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, course, label });
   // 카드 텍스트는 캐러셀 공장이 그대로 카드에 찍는다 — 마지막 교정자 한 번(수정이면 바뀐 컷만)
   return reviewCardCopy({ content: fitted, lectureMap, previous, instruction, label });
 }
 
-async function fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, label }) {
+async function fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, course, label }) {
   let { content: fixed, count } = normalizeCarouselCuts(content, label);
   const inRange = (n) => n >= CAROUSEL_CUT_MIN && n <= CAROUSEL_CUT_MAX;
   if (count === 0 || inRange(count)) return fixed;
@@ -165,6 +217,7 @@ async function fitCutCount({ content, job, voice, cafe, caption, concept, lectur
       cafe,
       caption,
       lectureMap,
+      course,
     }),
     transcript: job.transcript_full || job.transcript_compressed,
     maxTokens: 16000,
@@ -180,32 +233,32 @@ async function fitCutCount({ content, job, voice, cafe, caption, concept, lectur
 }
 
 /** 섹션별 호출 사양 구성 */
-function buildSectionSpecs({ voice, topic, concept, lectureMap, compressed, full }) {
+function buildSectionSpecs({ voice, topic, concept, lectureMap, course, compressed, full }) {
   return [
     {
       type: 'cafe',
       model: MODELS.CAFE,
       transcript: compressed,
-      prompt: buildCafePrompt({ voice, topic, concept }),
+      prompt: buildCafePrompt({ voice, topic, concept, course, lectureMap }),
     },
     {
       type: 'caption',
       model: MODELS.CAPTION,
       transcript: full, // 강의 정체를 잡아야 하므로 원본 자막 (지도와 함께)
-      prompt: buildCaptionPrompt({ voice, topic, concept, lectureMap }),
+      prompt: buildCaptionPrompt({ voice, topic, concept, lectureMap, course }),
     },
     {
       type: 'carousel',
       model: MODELS.CAROUSEL,
       transcript: full,
-      prompt: buildCarouselPrompt({ voice, topic, concept, lectureMap }),
+      prompt: buildCarouselPrompt({ voice, topic, concept, lectureMap, course }),
       maxTokens: 16000, // 장면 지시서 형식이라 출력이 길다 — 잘림 방지
     },
     {
       type: 'capture',
       model: MODELS.CAPTURE,
       transcript: full,
-      prompt: buildCapturePrompt({ concept }),
+      prompt: buildCapturePrompt({ concept, course, lectureMap }),
     },
   ];
 }
@@ -219,13 +272,15 @@ function buildSectionSpecs({ voice, topic, concept, lectureMap, compressed, full
 async function runSections({ job, voice, topic, concept, onProgress }) {
   // 강의 지도가 먼저다 — 캡션·캐러셀은 이걸 없이 쓰면 강의 전체를 모른 채 눈에 띄는 문장부터 잡는다.
   // 지도 작성이 실패하면 4종 전체를 멈춘다(지도 없는 캡션·캐러셀은 예전 실패로 돌아가는 것이라 의미가 없다).
-  const lectureMap = await ensureLectureMap(job);
+  const lectureMap = await ensureLectureMap(job, onProgress);
+  const course = await loadCourse(job.id); // 강좌 작업이면 4종 전부에 강좌 블록을 싣는다
 
   const specs = buildSectionSpecs({
     voice,
     topic,
     concept,
     lectureMap,
+    course,
     compressed: job.transcript_compressed,
     full: job.transcript_full,
   });
@@ -241,9 +296,9 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
       // 캐러셀은 먼저 쓴 캡션의 이야기를 장마다 끊어 보여준다(같은 게시물, 같은 줄거리) — 캡션 결과를 넘긴다
       const prompt =
         spec.type === 'capture'
-          ? buildCapturePrompt({ cafe: results.cafe, concept })
+          ? buildCapturePrompt({ cafe: results.cafe, concept, course, lectureMap })
           : spec.type === 'carousel'
-            ? buildCarouselPrompt({ voice, topic, concept, lectureMap, caption: results.caption })
+            ? buildCarouselPrompt({ voice, topic, concept, lectureMap, caption: results.caption, course })
             : spec.prompt;
       let content = await callClaude({
         model: spec.model,
@@ -255,7 +310,7 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
       });
       if (spec.type === 'carousel') {
         content = await finalizeCarousel({
-          content, job, voice, cafe: results.cafe, caption: results.caption, concept, lectureMap, label,
+          content, job, voice, cafe: results.cafe, caption: results.caption, concept, lectureMap, course, label,
         });
       }
       await saveContent(job.id, spec.type, content);
@@ -339,6 +394,117 @@ export async function generateAll({ url, topic, concept, onProgress = () => {} }
 }
 
 /**
+ * 강좌 기획 — 2~4강을 묶어 강좌 하나의 4종을 만든다.
+ * 강마다 자막을 갖춘 '강 작업'(jobs 행)을 두고(새 URL은 수집, 이미 수집한 영상·지난 작업은 그대로 씀),
+ * 강좌 작업 행에는 강마다 30초 한 줄로 압축한 '강좌 자막'을 저장한다. 강좌 지도는 runSections → ensureLectureMap이 만든다.
+ *
+ * @param {object} opts
+ * @param {Array<{ url?: string, jobId?: string }>} opts.lectures 강 순서대로(1강부터). URL 또는 지난 작업 ID
+ * @param {string} [opts.name] 강좌 이름(비우면 강 제목들의 공통 부분)
+ * @param {string} [opts.topic]
+ * @param {string} [opts.concept]
+ * @param {(payload: object) => void} [opts.onProgress]
+ */
+export async function generateCourse({ lectures, name, topic, concept, onProgress = () => {} }) {
+  const step = '강좌 기획';
+  const items = (lectures || []).filter((l) => l && ((l.url && l.url.trim()) || l.jobId));
+  if (items.length < 2 || items.length > COURSE_MAX_LECTURES) {
+    throw new Error(`${step}: 강좌는 2~${COURSE_MAX_LECTURES}강으로 묶습니다 (지금 ${items.length}강).`);
+  }
+
+  const voice = await loadVoice();
+  console.log('보이스 프로파일 로드 완료');
+
+  // 1) 강마다 자막이 있는 작업 행을 갖춘다
+  const children = [];
+  for (let i = 0; i < items.length; i++) {
+    const n = i + 1;
+    const item = items[i];
+    onProgress({ type: 'stage', stage: 'transcript', n, label: `${n}강 자막` });
+    let child = null;
+    if (item.jobId) {
+      child = await getJob(item.jobId);
+      if (!child) throw new Error(`${step}: ${n}강으로 고른 지난 작업(${item.jobId})을 찾을 수 없습니다.`);
+      if (isCourseJob(child)) throw new Error(`${step}: ${n}강 자리에는 강좌 작업이 아니라 강의 하나짜리 작업을 골라 주세요.`);
+      if (!child.transcript_full) throw new Error(`${step}: ${n}강으로 고른 작업에는 저장된 자막이 없습니다.`);
+      console.log(`${n}강: 지난 작업 재사용 — ${child.video_title}`);
+    } else {
+      const url = item.url.trim();
+      // 같은 영상을 이미 수집했으면 비메오를 다시 부르지 않는다
+      let existing = null;
+      try {
+        const videoId = vimeo.resolveVideoId ? await vimeo.resolveVideoId(url) : null;
+        existing = videoId ? await findJobByVideoId(videoId) : null;
+      } catch {
+        existing = null; // 해석 실패는 아래 수집에서 제대로 된 오류로 드러난다
+      }
+      if (existing && !isCourseJob(existing)) {
+        child = existing;
+        console.log(`${n}강: 이미 수집한 자막 재사용 — ${child.video_title}`);
+      } else {
+        console.log(`${n}강 자막 수집 시작...`);
+        let transcript;
+        try {
+          transcript = await getTranscript(url);
+        } catch (err) {
+          throw new Error(`${n}강 ${err.message}`);
+        }
+        child = await saveJob({
+          video_id: transcript.videoId,
+          video_title: transcript.title,
+          vimeo_url: url,
+          topic: null,
+          transcript_compressed: transcript.compressed,
+          transcript_full: transcript.full,
+        });
+        if (transcript.duration) child.duration = transcript.duration;
+        console.log(`${n}강 작업 생성: ${child.id} (${transcript.title})`);
+      }
+    }
+    children.push({ n, job: child });
+  }
+
+  // 2) 강좌 작업 행 — 강좌 자막(강마다 30초 한 줄, 시각에 회차) + 구성 JSON
+  const courseName = (name || '').trim() || deriveCourseName(children.map((c) => c.job.video_title)) || '강좌';
+  const courseTranscript = buildCourseTranscript(
+    children.map((c) => ({
+      n: c.n,
+      title: c.job.video_title,
+      duration: c.job.duration,
+      transcript_full: c.job.transcript_full,
+      transcript_compressed: c.job.transcript_compressed,
+    }))
+  );
+  const job = await saveJob({
+    video_id: newCourseVideoId(),
+    video_title: courseName,
+    vimeo_url: children.map((c) => c.job.vimeo_url).join('\n'),
+    topic: topic || null,
+    transcript_compressed: courseTranscript,
+    transcript_full: courseTranscript, // 강좌는 원본 자막을 통째로 싣지 않는다 — 두 칸 다 강좌 자막
+  });
+  const courseMeta = {
+    name: courseName,
+    lectures: children.map((c) => ({
+      n: c.n,
+      jobId: c.job.id,
+      videoId: c.job.video_id,
+      title: c.job.video_title,
+      duration: c.job.duration || null,
+      url: c.job.vimeo_url,
+    })),
+  };
+  await saveContent(job.id, COURSE_TYPE, JSON.stringify(courseMeta));
+  await saveConcept(job.id, concept);
+  console.log(`강좌 작업 생성: ${job.id} (${courseName}, ${children.length}강, 강좌 자막 ${courseTranscript.length}자)`);
+
+  onProgress({ type: 'job_created', jobId: job.id, course: courseMeta });
+
+  const { results, failed } = await runSections({ job, voice, topic, concept, onProgress });
+  return { jobId: job.id, results, failed, course: courseMeta };
+}
+
+/**
  * 전체 기획 다시하기 — 컨셉이 통째로 어긋났을 때. 기존 작업의 자막을 그대로 쓰고,
  * 사용자가 적은 [기획 컨셉]을 4종 프롬프트 전부에 넣어 cafe → caption → carousel → capture를 다시 생성한다.
  * 각 섹션은 새 버전으로 저장된다(이전 버전은 이력에 남음).
@@ -400,8 +566,10 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
 
   const voice = await loadVoice();
   const concept = await loadConcept(jobId);
-  // 캡션·캐러셀 수정은 강의 지도와 원본 자막을 쓴다(옛 작업이면 여기서 지도를 만들어 채운다). 카페는 이전 그대로.
-  const usesMap = type === 'caption' || type === 'carousel';
+  const course = await loadCourse(jobId);
+  // 캡션·캐러셀 수정은 강의 지도와 원본 자막을 쓴다(옛 작업이면 여기서 지도를 만들어 채운다). 카페는 이전 그대로 —
+  // 단, 강좌 작업의 카페 글은 강별 안내가 지도에서 오므로 강좌 지도를 싣는다.
+  const usesMap = type === 'caption' || type === 'carousel' || !!course;
   const lectureMap = usesMap ? await ensureLectureMap(job) : undefined;
   const transcript = usesMap ? job.transcript_full || job.transcript_compressed : job.transcript_compressed;
 
@@ -420,14 +588,14 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
   let content = await callClaude({
     model: REVISE_MODELS[type],
     system: COMMON_HEADER,
-    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, concept, lectureMap, ...extra }),
+    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, concept, lectureMap, course, ...extra }),
     transcript,
     maxTokens: type === 'carousel' ? 16000 : 8000, // 캐러셀은 장면 지시서 형식이라 출력이 길다
     step: `${label} 수정`,
   });
   if (type === 'carousel') {
     content = await finalizeCarousel({
-      content, job, voice, cafe: extra.cafe, caption: extra.caption, concept, lectureMap, label: `${label} 수정`,
+      content, job, voice, cafe: extra.cafe, caption: extra.caption, concept, lectureMap, course, label: `${label} 수정`,
       previous: latest.content, instruction,
     });
   }
@@ -443,7 +611,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
       capture = await callClaude({
         model: MODELS.CAPTURE,
         system: COMMON_HEADER,
-        prompt: buildCapturePrompt({ cafe: content, concept }),
+        prompt: buildCapturePrompt({ cafe: content, concept, course, lectureMap }),
         transcript: job.transcript_full, // 타임스탬프 정확도를 위해 원본 자막
         maxTokens: 8000,
         step: '캡쳐 가이드 갱신',
@@ -485,6 +653,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
             voice,
             concept,
             lectureMap,
+            course,
             carousel: content,
           }),
           transcript,
@@ -523,7 +692,8 @@ export async function regenerateSecondary({ jobId }) {
   const voice = await loadVoice();
   const concept = await loadConcept(jobId);
   const lectureMap = await ensureLectureMap(job);
-  const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined, concept };
+  const course = await loadCourse(jobId);
+  const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined, concept, course };
 
   console.log('캐러셀 기획 재생성 중...');
   let carousel = await callClaude({
@@ -535,7 +705,7 @@ export async function regenerateSecondary({ jobId }) {
     step: '캐러셀 기획 재생성',
   });
   carousel = await finalizeCarousel({
-    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, lectureMap, label: '캐러셀 기획 재생성',
+    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, lectureMap, course, label: '캐러셀 기획 재생성',
   });
   await saveContent(jobId, 'carousel', carousel);
   console.log('캐러셀 기획 재생성 완료');
@@ -544,7 +714,7 @@ export async function regenerateSecondary({ jobId }) {
   const capture = await callClaude({
     model: MODELS.CAPTURE,
     system: COMMON_HEADER,
-    prompt: buildRegeneratePrompt({ type: 'capture', ...context }),
+    prompt: buildRegeneratePrompt({ type: 'capture', ...context, lectureMap }),
     transcript: job.transcript_full, // 캡쳐는 타임스탬프 정확도를 위해 원본 자막 사용
     maxTokens: 8000,
     step: '캡쳐 가이드 재생성',

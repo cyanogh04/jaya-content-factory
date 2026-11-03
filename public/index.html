@@ -4,189 +4,241 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>자야쌤 콘텐츠 공장</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="wrap">
+<div class="app">
 
-    <header class="site-header">
-      <h1 class="logo">자야쌤 콘텐츠 공장</h1>
-      <p class="tagline">비메오 강의 URL 하나로 카페·인스타·캐러셀 4종 즉시 생성</p>
-    </header>
+  <!-- ───────── 왼쪽: 작업함 ───────── -->
+  <aside class="rail" id="rail">
+    <div class="rail-brand">
+      <span class="rail-logo">자야쌤 콘텐츠 공장</span>
+      <span class="rail-sub">비메오 강의 → 카페·인스타 4종</span>
+    </div>
+
+    <button id="new-btn" class="btn btn-primary rail-new" type="button">새 기획</button>
 
     <div id="status-bar" class="status-bar" hidden></div>
 
-    <section class="input-panel">
-      <div class="input-row">
-        <input id="url-input" type="url" class="input-url"
-          placeholder="https://vimeo.com/..."
-          autocomplete="off" spellcheck="false" />
-        <input id="topic-input" type="text" class="input-topic"
-          placeholder="강의 주제 (선택)"
-          autocomplete="off" />
+    <div class="rail-head">
+      <span class="rail-title">지난 작업</span>
+      <span class="rail-count" id="history-count"></span>
+    </div>
+    <ul id="history-list" class="history-list" aria-label="지난 작업 목록"></ul>
+    <p id="history-empty" class="rail-empty" hidden>아직 기획한 작업이 없어요. 위 ‘새 기획’에서 시작해요.</p>
+
+    <div class="rail-foot">
+      <button id="learn-voice-btn" class="btn btn-ghost" type="button">보이스 프로파일 갱신</button>
+      <button id="learn-voice-manual-btn" class="btn btn-ghost" type="button">캡션 직접 입력</button>
+      <button id="exchange-token-btn" class="btn btn-ghost" type="button">Instagram 토큰 교환</button>
+    </div>
+  </aside>
+
+  <!-- ───────── 오른쪽: 작업 공간 ───────── -->
+  <main class="stage">
+
+    <!-- 새 기획 — 강의 하나 / 강좌 묶기 -->
+    <section id="composer" class="composer">
+      <header class="composer-head">
+        <h1 class="composer-title">새 기획</h1>
+        <p class="composer-lead">비메오 링크를 넣으면 카페 서머리·캡쳐 가이드·인스타 캐러셀 기획·캡션 4종을 차례로 만들어요.</p>
+      </header>
+
+      <div class="mode-switch" role="tablist" aria-label="기획 종류">
+        <button type="button" class="mode-btn is-on" data-mode="single" role="tab" aria-selected="true">
+          <span class="mode-name">강의 하나</span>
+          <span class="mode-desc">영상 한 편을 소개하는 글</span>
+        </button>
+        <button type="button" class="mode-btn" data-mode="course" role="tab" aria-selected="false">
+          <span class="mode-name">강좌 묶기</span>
+          <span class="mode-desc">2~4강을 한 번에 읽고 강좌 전체를 소개</span>
+        </button>
       </div>
-      <textarea id="concept-input" class="input-concept" rows="2"
-        placeholder="기획 컨셉 (선택) — 4종을 관통할 방향. 예: 초보가 '옷장에 걸리는 첫 옷'을 완성하는 이야기로. 결 잡기·심지 실패담을 앞세우고 기술 나열은 뒤로"></textarea>
-      <button id="generate-btn" class="btn btn-primary">생성 시작</button>
+
+      <!-- 강 슬롯 — 강좌 모드에서는 1강부터 순서대로 -->
+      <div class="slots" id="slots"></div>
+      <div class="slots-foot">
+        <button type="button" id="add-slot-btn" class="btn btn-ghost btn-add" hidden>+ 강 추가</button>
+        <p class="slots-hint" id="slots-hint"></p>
+      </div>
+
+      <div class="fields">
+        <label class="field" id="course-name-field" hidden>
+          <span class="field-label">강좌 이름</span>
+          <input id="course-name-input" type="text" class="input" placeholder="비우면 강 제목의 공통 부분으로 정해요 (예: 크롭데님쟈켓)" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span class="field-label">강의 주제 <em>선택</em></span>
+          <input id="topic-input" type="text" class="input" placeholder="예: 청자켓 원단 고르기와 봉제 세팅" autocomplete="off" />
+        </label>
+        <label class="field field-wide">
+          <span class="field-label">기획 컨셉 <em>선택 — 4종을 관통하는 방향</em></span>
+          <textarea id="concept-input" class="input input-area" rows="2"
+            placeholder="예: 초보가 ‘옷장에 걸리는 첫 옷’을 완성하는 이야기로. 결 잡기·심지 실패담을 앞세우고 기술 나열은 뒤로"></textarea>
+        </label>
+      </div>
+
+      <div class="composer-actions">
+        <button id="generate-btn" class="btn btn-primary btn-lg" type="button">기획 시작</button>
+        <span class="composer-note" id="composer-note"></span>
+      </div>
     </section>
 
-    <!-- 지난 작업 히스토리 -->
-    <section id="history-panel" class="history-panel" hidden>
-      <div class="history-head">
-        <h2 class="history-title">지난 작업</h2>
-        <span class="history-count" id="history-count"></span>
-      </div>
-      <ul id="history-list" class="history-list"></ul>
-    </section>
+    <!-- 작업 공간 — 생성 중이거나 지난 작업을 열었을 때 -->
+    <section id="workspace" class="workspace" hidden>
+      <header class="ws-head">
+        <div class="ws-titles">
+          <div class="ws-kind" id="ws-kind"></div>
+          <h1 class="ws-title" id="ws-title">—</h1>
+          <div class="ws-meta" id="ws-meta"></div>
+        </div>
+        <div class="ws-actions">
+          <button id="copy-all-btn" class="btn btn-secondary" type="button" title="강의 지도와 4종을 마크다운 한 벌로 복사 — 챗GPT 등에 붙여 넣기 좋게">전체 복사</button>
+          <button id="save-notion-btn" class="btn btn-notion" type="button" disabled>노션에 저장</button>
+        </div>
+      </header>
 
-    <main id="results" hidden>
-      <div class="sections-grid">
+      <!-- 강좌: 강 띠. 강의 하나면 링크 한 줄 -->
+      <ol class="lecture-strip" id="lecture-strip"></ol>
 
-        <!-- 배치: 1행 카페 서머리 | 캡쳐 가이드(카페 📷 자리와 짝), 2행 캐러셀 기획 | 인스타 캡션(같은 게시물의 짝).
-             생성 순서(cafe→caption→carousel→capture)와 무관하게 복사해 쓰기 편한 짝으로 놓는다. -->
-        <!-- 카페 서머리 -->
-        <article class="content-card" id="card-cafe" data-type="cafe">
-          <div class="card-header">
+      <!-- 생성 진행 — 단계가 차례로 채워진다 -->
+      <ol class="progress" id="progress" hidden></ol>
+
+      <nav class="tabs" role="tablist" aria-label="결과 묶음">
+        <button type="button" class="tab is-on" data-tab="cafe-pack" role="tab" aria-selected="true">카페 글 <span class="tab-pair">서머리 · 캡쳐 가이드</span></button>
+        <button type="button" class="tab" data-tab="insta-pack" role="tab" aria-selected="false">인스타 게시물 <span class="tab-pair">캐러셀 기획 · 캡션</span></button>
+        <button type="button" class="tab" data-tab="map-pack" role="tab" aria-selected="false">강의 지도</button>
+        <button type="button" class="tab" data-tab="redo-pack" role="tab" aria-selected="false">다시 기획</button>
+      </nav>
+
+      <!-- 카페 글: 카페 서머리 | 캡쳐 가이드 (📷 자리로 짝) -->
+      <div class="pack is-on" id="pack-cafe-pack" role="tabpanel">
+        <article class="card" id="card-cafe" data-type="cafe">
+          <div class="card-head">
             <span class="card-title">네이버 카페 서머리</span>
-            <span class="char-count" id="count-cafe"></span>
+            <span class="card-count" id="count-cafe"></span>
             <select id="version-cafe" class="version-select" title="저장된 버전 보기 (토큰 사용 없음)" hidden></select>
-            <button class="btn btn-confirm-version" data-type="cafe" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
-            <button class="btn btn-copy" data-target="cafe" disabled>복사</button>
+            <button class="btn btn-confirm-version" data-type="cafe" type="button" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
+            <button class="btn btn-copy" data-target="cafe" type="button" disabled>복사</button>
           </div>
-          <div class="card-body" id="body-cafe">
-            <div class="skeleton-wrap">
-              <div class="spinner"></div>
-              <p class="loading-text">생성 중…</p>
-            </div>
-          </div>
-          <div class="revision-row" id="revision-cafe" hidden>
-            <input type="text" id="revise-cafe" class="input-revise"
-              placeholder="수정 요청 (예: 첫 문단 더 따뜻하게)" />
-            <button class="btn btn-revise" data-type="cafe" disabled>재생성</button>
+          <div class="card-body" id="body-cafe"></div>
+          <div class="revise" id="revision-cafe" hidden>
+            <input type="text" id="revise-cafe" class="input input-revise" placeholder="수정 요청 (예: 2강 안내를 더 짧게, 첫 문단 더 따뜻하게)" />
+            <button class="btn btn-revise" data-type="cafe" type="button" disabled>재생성</button>
           </div>
         </article>
 
-        <!-- 캡쳐 가이드 -->
-        <article class="content-card" id="card-capture" data-type="capture">
-          <div class="card-header">
+        <article class="card" id="card-capture" data-type="capture">
+          <div class="card-head">
             <span class="card-title">캡쳐 가이드</span>
             <select id="version-capture" class="version-select" title="저장된 버전 보기 (토큰 사용 없음)" hidden></select>
-            <button class="btn btn-confirm-version" data-type="capture" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
-            <button class="btn btn-copy" data-target="capture" disabled>복사</button>
+            <button class="btn btn-confirm-version" data-type="capture" type="button" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
+            <button class="btn btn-copy" data-target="capture" type="button" disabled>복사</button>
           </div>
-          <div class="card-body" id="body-capture">
-            <div class="skeleton-wrap">
-              <div class="spinner"></div>
-              <p class="loading-text">생성 중…</p>
-            </div>
-          </div>
+          <div class="card-body" id="body-capture"></div>
         </article>
+      </div>
 
-        <!-- 캐러셀 기획 -->
-        <article class="content-card" id="card-carousel" data-type="carousel">
-          <div class="card-header">
+      <!-- 인스타 게시물: 캐러셀 기획 | 캡션 (같은 게시물의 짝) -->
+      <div class="pack" id="pack-insta-pack" role="tabpanel" hidden>
+        <article class="card" id="card-carousel" data-type="carousel">
+          <div class="card-head">
             <span class="card-title">인스타 캐러셀 기획</span>
             <select id="version-carousel" class="version-select" title="저장된 버전 보기 (토큰 사용 없음)" hidden></select>
-            <button class="btn btn-confirm-version" data-type="carousel" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
-            <button class="btn btn-copy" data-target="carousel" disabled>복사</button>
+            <button class="btn btn-confirm-version" data-type="carousel" type="button" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
+            <button class="btn btn-copy" data-target="carousel" type="button" disabled>복사</button>
           </div>
-          <div class="card-body" id="body-carousel">
-            <div class="skeleton-wrap">
-              <div class="spinner"></div>
-              <p class="loading-text">생성 중…</p>
-            </div>
-          </div>
-          <div class="revision-row revision-row--stack" id="revision-carousel" hidden>
-            <!-- 기획안의 [후크 후보] A안/B안/C안을 읽어 버튼으로 만든다. 채택안이 아닌 안을 누르면 그 안으로 1컷부터 재기획 -->
+          <div class="card-body" id="body-carousel"></div>
+          <div class="revise revise-stack" id="revision-carousel" hidden>
+            <!-- 기획안의 [후크 후보] A안/B안/C안 → 버튼. 채택안이 아닌 안을 누르면 그 안으로 1컷부터 재기획 -->
             <div class="hook-picker" id="hooks-carousel" hidden>
-              <span class="hook-picker-label">1컷 후크 안 바꾸기</span>
+              <span class="hook-label">1컷 후크 안 바꾸기</span>
               <div class="hook-chips" id="hook-chips-carousel"></div>
-              <!-- 캐러셀과 캡션은 같은 게시물의 짝 — 안이 바뀌면 캡션 첫 두 줄도 같은 갈래로 따라간다 -->
               <label class="hook-align">
                 <input type="checkbox" id="align-caption" checked />
                 <span>짝꿍 인스타 캡션도 선택한 안에 맞춰 첫 줄부터 수정</span>
               </label>
             </div>
-            <div class="revision-input-row">
-              <input type="text" id="revise-carousel" class="input-revise"
-                placeholder="수정 요청 (예: B안으로 다시 기획 / 7컷 헤드카피 더 짧게)" />
-              <button class="btn btn-revise" data-type="carousel" disabled>재생성</button>
+            <div class="revise-row">
+              <input type="text" id="revise-carousel" class="input input-revise" placeholder="수정 요청 (예: B안으로 다시 기획 / 7컷 헤드카피 더 짧게)" />
+              <button class="btn btn-revise" data-type="carousel" type="button" disabled>재생성</button>
             </div>
           </div>
         </article>
 
-        <!-- 인스타 캡션 -->
-        <article class="content-card" id="card-caption" data-type="caption">
-          <div class="card-header">
+        <article class="card" id="card-caption" data-type="caption">
+          <div class="card-head">
             <span class="card-title">인스타 캡션</span>
-            <span class="char-count" id="count-caption"></span>
+            <span class="card-count" id="count-caption"></span>
             <select id="version-caption" class="version-select" title="저장된 버전 보기 (토큰 사용 없음)" hidden></select>
-            <button class="btn btn-confirm-version" data-type="caption" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
-            <button class="btn btn-copy" data-target="caption" disabled>복사</button>
+            <button class="btn btn-confirm-version" data-type="caption" type="button" title="지금 보는 버전을 최신으로 되살립니다 (모델 호출 없음)" hidden>이 버전으로 확정</button>
+            <button class="btn btn-copy" data-target="caption" type="button" disabled>복사</button>
           </div>
-          <div class="card-body" id="body-caption">
-            <div class="skeleton-wrap">
-              <div class="spinner"></div>
-              <p class="loading-text">생성 중…</p>
-            </div>
-          </div>
-          <div class="revision-row" id="revision-caption" hidden>
-            <input type="text" id="revise-caption" class="input-revise"
-              placeholder="수정 요청 (예: CTA 부분 다시)" />
-            <button class="btn btn-revise" data-type="caption" disabled>재생성</button>
+          <div class="card-body" id="body-caption"></div>
+          <div class="revise" id="revision-caption" hidden>
+            <input type="text" id="revise-caption" class="input input-revise" placeholder="수정 요청 (예: CTA 부분 다시)" />
+            <button class="btn btn-revise" data-type="caption" type="button" disabled>재생성</button>
           </div>
         </article>
-
-      </div><!-- .sections-grid -->
-
-      <!-- 컨셉이 통째로 어긋났을 때: 관통하는 주제를 적고 4종을 다시 기획 -->
-      <section id="concept-row" class="concept-row" hidden>
-        <div class="concept-head">
-          <span class="concept-title">전체 기획 다시하기</span>
-          <span class="concept-hint">컨셉이 어긋났나요? 카페·캡션·캐러셀·캡쳐 4종을 관통할 주제와 방향을 적으면 저장된 자막으로 처음부터 다시 기획합니다. 이전 버전은 이력에 남습니다.</span>
-        </div>
-        <div class="concept-body">
-          <textarea id="concept-redo" class="input-concept" rows="3"
-            placeholder="예: '15년차가 뜯어본 명품 봉제'가 아니라 '초보가 처음 완성하는 코트'로. 실패담(결 틀어짐·심지 우글거림)을 앞세우고, 기술 이름은 solution 컷에만."></textarea>
-          <button id="regen-all-btn" class="btn btn-primary btn-regen-all" disabled>이 컨셉으로 4종 다시 기획</button>
-        </div>
-      </section>
-
-      <div id="regen-row" class="regen-row" hidden>
-        <p class="regen-hint">카페 서머리·캡션을 확정하셨나요?</p>
-        <button id="regen-btn" class="btn btn-secondary">
-          캐러셀·캡쳐 가이드 재생성
-        </button>
-        <button id="save-notion-btn" class="btn btn-notion">
-          노션에 저장
-        </button>
       </div>
 
-    </main><!-- #results -->
+      <!-- 강의 지도 — 4종이 기대고 있는 사실 정리. 읽기 전용 -->
+      <div class="pack pack-single" id="pack-map-pack" role="tabpanel" hidden>
+        <article class="card" id="card-map">
+          <div class="card-head">
+            <span class="card-title" id="map-title">강의 지도</span>
+            <span class="card-note">원본 자막 전체를 읽고 정리한 사실 — 캡션·캐러셀이 이 지도를 기준으로 써요</span>
+            <button class="btn btn-copy" data-target="map" type="button" disabled>복사</button>
+          </div>
+          <div class="card-body" id="body-map"></div>
+        </article>
+      </div>
 
-    <footer class="site-footer">
-      <button id="exchange-token-btn" class="btn btn-ghost">Instagram 토큰 교환</button>
-      <button id="learn-voice-btn" class="btn btn-ghost">보이스 프로파일 갱신</button>
-      <button id="learn-voice-manual-btn" class="btn btn-ghost">캡션 직접 입력</button>
-    </footer>
+      <!-- 다시 기획 — 컨셉 기준 4종 재기획 / 캐러셀·캡쳐 재생성 -->
+      <div class="pack pack-single" id="pack-redo-pack" role="tabpanel" hidden>
+        <article class="card">
+          <div class="card-head">
+            <span class="card-title">전체 기획 다시하기</span>
+            <span class="card-note">컨셉이 어긋났을 때 — 4종을 관통할 방향을 적으면 저장된 자막으로 처음부터 다시 기획해요. 이전 버전은 이력에 남아요.</span>
+          </div>
+          <div class="card-body card-body-form">
+            <textarea id="concept-redo" class="input input-area" rows="3"
+              placeholder="예: ‘15년차가 뜯어본 명품 봉제’가 아니라 ‘초보가 처음 완성하는 코트’로. 실패담(결 틀어짐·심지 우글거림)을 앞세우고, 기술 이름은 solution 컷에만."></textarea>
+            <button id="regen-all-btn" class="btn btn-primary" type="button" disabled>이 컨셉으로 4종 다시 기획</button>
+          </div>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <span class="card-title">캐러셀·캡쳐 가이드 재생성</span>
+            <span class="card-note">카페 서머리와 캡션을 확정했으면, 그 둘을 기준으로 캐러셀 기획과 캡쳐 가이드만 다시 만들어요.</span>
+          </div>
+          <div class="card-body card-body-form">
+            <button id="regen-btn" class="btn btn-secondary" type="button" disabled>캐러셀·캡쳐 가이드 재생성</button>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
 
-    <div id="manual-caption-modal" class="modal-overlay" hidden>
-      <div class="modal-box">
-        <h2 class="modal-title">인스타 캡션 직접 입력</h2>
-        <p class="modal-desc">자야쌤 인스타 캡션을 복사해서 붙여넣으세요.<br>캡션 사이는 <strong>빈 줄</strong>로 구분합니다. 10개 이상 권장.</p>
-        <textarea id="manual-captions-input" class="caption-textarea" placeholder="첫 번째 캡션...
+<div id="manual-caption-modal" class="modal-overlay" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="manual-title">
+    <h2 class="modal-title" id="manual-title">인스타 캡션 직접 입력</h2>
+    <p class="modal-desc">자야쌤 인스타 캡션을 복사해서 붙여넣으세요.<br>캡션 사이는 <strong>빈 줄</strong>로 구분해요. 10개 이상 권장.</p>
+    <textarea id="manual-captions-input" class="input input-area caption-textarea" placeholder="첫 번째 캡션...
 
 두 번째 캡션...
 
 세 번째 캡션..."></textarea>
-        <div class="modal-actions">
-          <button id="manual-caption-submit" class="btn btn-primary">학습 시작</button>
-          <button id="manual-caption-cancel" class="btn btn-ghost">취소</button>
-        </div>
-      </div>
+    <div class="modal-actions">
+      <button id="manual-caption-submit" class="btn btn-primary" type="button">학습 시작</button>
+      <button id="manual-caption-cancel" class="btn btn-ghost" type="button">취소</button>
     </div>
+  </div>
+</div>
 
-  </div><!-- .wrap -->
-  <script src="app.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
