@@ -10,15 +10,22 @@ const API_URL = 'https://api.anthropic.com/v1/messages';
 const API_VERSION = '2023-06-01';
 
 // 모델 선택 (CLAUDE.md 기준):
-//   4종 모두 claude-opus-4-8. (2026-09-04 캐러셀·캡쳐도 sonnet-4-6 → opus-4-8로 올림 — 기획 품질 우선.
-//   모델이 하나라 자막 캐시 블록이 4종 호출 전부에서 재사용된다.)
+//   전부 한 모델 — 모델이 하나라 자막 캐시 블록이 지도·4종 호출 전부에서 재사용된다.
+//   2026-09-04 캐러셀·캡쳐도 sonnet-4-6 → opus-4-8로 올림(기획 품질 우선). 2026-11-04 opus-4-8 → opus-5-5
+//   (후속 모델이고 더 싸다: 입력 $4/출력 $20 per 1M vs $5/$25). 모델 ID는 코드에 박혀 있어 저절로 바뀌지 않는다 —
+//   새 모델이 나오면 .env의 CLAUDE_MODEL(Render 환경변수)로 배포 없이 바꾸거나 아래 기본값을 올린다.
+const DEFAULT_MODEL = process.env.CLAUDE_MODEL || 'claude-opus-5-5';
 export const MODELS = {
-  VOICE: 'claude-opus-4-8',
-  CAFE: 'claude-opus-4-8',
-  CAPTION: 'claude-opus-4-8',
-  CAROUSEL: 'claude-opus-4-8',
-  CAPTURE: 'claude-opus-4-8',
+  VOICE: DEFAULT_MODEL,
+  CAFE: DEFAULT_MODEL,
+  CAPTION: DEFAULT_MODEL,
+  CAROUSEL: DEFAULT_MODEL,
+  CAPTURE: DEFAULT_MODEL,
 };
+
+// 사고 깊이 — Opus 5.5는 사고(thinking)가 항상 켜져 있고 effort로만 조절한다(기본 medium).
+// 기획·글쓰기라 high로 둔다. CLAUDE_EFFORT=low|medium|high|xhigh|max 로 바꿀 수 있다.
+const EFFORT = process.env.CLAUDE_EFFORT || 'high';
 
 /**
  * Claude 호출.
@@ -53,6 +60,7 @@ export async function callClaude({ model, system, prompt, transcript, maxTokens 
   const body = {
     model,
     max_tokens: maxTokens,
+    output_config: { effort: EFFORT },
     messages: [{ role: 'user', content }],
   };
   if (system) {
@@ -73,7 +81,6 @@ export async function callClaude({ model, system, prompt, transcript, maxTokens 
         'content-type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': API_VERSION,
-        'anthropic-beta': 'prompt-caching-2024-07-31',
       },
       body: JSON.stringify(body),
       signal: controller.signal,

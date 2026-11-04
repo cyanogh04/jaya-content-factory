@@ -208,7 +208,7 @@ CREATE TABLE voice_profile (
 - API 버전 상수 `GRAPH_API_VERSION = 'v21.0'`으로 코드 한 곳에서 관리.
 
 ### 10.3 Anthropic (생성)
-- 모델: 4종(cafe·caption·carousel·capture) 모두 `claude-opus-4-8` (carousel·capture는 2026-09-04에 sonnet-4-6에서 올림).
+- 모델: 강의 지도·4종 모두 `claude-opus-5-5`, effort high (2026-11-04 opus-4-8에서 올림; carousel·capture는 2026-09-04에 sonnet-4-6에서 올림). 환경변수 `CLAUDE_MODEL`로 바꿀 수 있다.
 - `max_tokens` 4000 이상.
 - **프롬프트 캐싱**: 자막 블록에 `cache_control: {"type": "ephemeral"}` 적용. 4종 순차 호출 시 자막 입력 토큰 약 90% 절감.
 

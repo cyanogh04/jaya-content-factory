@@ -36,11 +36,11 @@
 - 로컬 개발 시 Supabase 미연결이면 파일 시스템 폴백 자동 적용.
 
 ## 환경변수
-`ANTHROPIC_API_KEY`, `VIMEO_ACCESS_TOKEN`, `INSTAGRAM_ACCESS_TOKEN`, `IG_USER_ID`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PORT`
+`ANTHROPIC_API_KEY`, `VIMEO_ACCESS_TOKEN`, `INSTAGRAM_ACCESS_TOKEN`, `IG_USER_ID`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PORT`, 선택 `CLAUDE_MODEL`·`CLAUDE_EFFORT`
 
 ## 모델 선택
-- caption, cafe_summary → `claude-opus-4-8` (말투 중요).
-- capture_guide, carousel_plan → `claude-opus-4-8` (2026-09-04부터. 기획 품질 우선으로 sonnet에서 올림. 4종이 같은 모델이라 자막 프롬프트 캐시가 전부 재사용된다).
+- 강의 지도·4종·보이스 학습 전부 **`claude-opus-5-5`**, `output_config.effort: high` (`src/anthropic.js`). 2026-11-04에 `claude-opus-4-8`에서 올림 — 후속 모델이고 더 싸다. 한 모델이라 자막 프롬프트 캐시가 전부 재사용된다.
+- **모델은 저절로 바뀌지 않는다.** 새 모델이 나오면 `.env`/Render 환경변수 `CLAUDE_MODEL`(사고 깊이는 `CLAUDE_EFFORT`)로 배포 없이 바꾸거나 `anthropic.js`의 기본값을 올린다. Opus 5.5는 사고가 항상 켜져 있어 `thinking`을 끄거나 `temperature`·prefill·강제 `tool_choice`를 보내면 400이다 — 지금 코드는 아무것도 안 보낸다.
 - 한국어 출력이 기니 `max_tokens`는 4000 이상.
 
 ## 코딩 컨벤션
