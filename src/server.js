@@ -19,6 +19,7 @@ import { learn as learnVoice } from './voice.js';
 import { exchangeToLongLived, autoRefreshIfNeeded } from './instagram.js';
 import { saveLectureToNotion } from './notion.js';
 import { getJob, getContents, getLatestContent, getVoiceProfile, isSupabase, listJobs, saveContent } from './db.js';
+import { resolveModel, getModelStatus } from './anthropic.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
@@ -47,6 +48,7 @@ app.get('/api/status', async (req, res) => {
     hasVoiceProfile,
     storage: isSupabase() ? 'supabase' : 'file',
     commit: process.env.RENDER_GIT_COMMIT || null, // 배포된 코드 버전 확인용
+    model: getModelStatus(), // { model, mode, effort, newer, latest, checked, error } — 화면이 모델·새 모델 알림을 보여 준다
   });
 });
 
@@ -377,6 +379,8 @@ app.listen(PORT, () => {
   if (missing.length > 0) {
     console.warn(`환경변수를 설정하세요: ${missing.join(', ')} (.env 파일 — .env.example 참고)`);
   }
+  // 모델 목록을 한 번 보고 — CLAUDE_MODEL=auto면 가장 새 Opus로, 고정이면 새 Opus가 나왔는지 알림만 (토큰 0)
+  resolveModel().catch(() => {});
   // Instagram 토큰 만료 30일 전이면 자동 연장
   autoRefreshIfNeeded().catch(() => {});
 });

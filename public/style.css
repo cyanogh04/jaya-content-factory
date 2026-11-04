@@ -85,6 +85,22 @@ button { cursor: pointer; }
   margin-bottom: 12px;
 }
 
+.status-bar-info {
+  background: var(--surface-2);
+  border-color: var(--line-2);
+  color: var(--ink-2);
+}
+.model-line {
+  flex: 1 1 100%;
+  font-size: .74rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
+
 .rail-head {
   display: flex;
   align-items: baseline;

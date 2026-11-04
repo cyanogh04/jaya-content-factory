@@ -72,8 +72,28 @@ async function checkStatus() {
       $statusBar.textContent = warnings.join(' / ');
       $statusBar.removeAttribute('hidden');
     }
+    renderModel(data.model);
   } catch {
     /* 상태 확인 실패는 조용히 */
+  }
+}
+
+/** 사이드바 아래 모델 표시 + 더 새 Opus가 나왔으면 알림 (서버가 켜질 때 모델 목록 API를 본 결과) */
+function renderModel(m) {
+  const line = $('model-line');
+  const note = $('model-note');
+  if (!m || !m.model) { line.setAttribute('hidden', ''); note.setAttribute('hidden', ''); return; }
+  line.textContent = `모델 ${m.model} · ${m.effort}${m.mode === 'auto' ? ' · 자동(가장 새 Opus)' : ''}`;
+  line.title = m.mode === 'auto'
+    ? '서버가 켜질 때 가장 새 Opus를 골라 씁니다 (CLAUDE_MODEL=auto)'
+    : '모델은 저절로 바뀌지 않아요. 바꾸려면 Render 환경변수 CLAUDE_MODEL을 고치거나 auto로 두세요';
+  line.removeAttribute('hidden');
+  if (m.newer) {
+    const date = (m.newer.created_at || '').slice(0, 10);
+    note.textContent = `새 모델 ${m.newer.id}${date ? ` (${date})` : ''}가 나왔어요. 지금은 ${m.model}을 써요 — Render 환경변수 CLAUDE_MODEL을 ${m.newer.id}로 바꾸거나 auto로 두면 돼요.`;
+    note.removeAttribute('hidden');
+  } else {
+    note.setAttribute('hidden', '');
   }
 }
 

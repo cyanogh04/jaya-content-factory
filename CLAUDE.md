@@ -40,7 +40,7 @@
 
 ## 모델 선택
 - 강의 지도·4종·보이스 학습 전부 **`claude-opus-5-5`**, `output_config.effort: high` (`src/anthropic.js`). 2026-11-04에 `claude-opus-4-8`에서 올림 — 후속 모델이고 더 싸다. 한 모델이라 자막 프롬프트 캐시가 전부 재사용된다.
-- **모델은 저절로 바뀌지 않는다.** 새 모델이 나오면 `.env`/Render 환경변수 `CLAUDE_MODEL`(사고 깊이는 `CLAUDE_EFFORT`)로 배포 없이 바꾸거나 `anthropic.js`의 기본값을 올린다. Opus 5.5는 사고가 항상 켜져 있어 `thinking`을 끄거나 `temperature`·prefill·강제 `tool_choice`를 보내면 400이다 — 지금 코드는 아무것도 안 보낸다.
+- **모델은 저절로 바뀌지 않는다.** 새 모델이 나오면 `.env`/Render 환경변수 `CLAUDE_MODEL`(사고 깊이는 `CLAUDE_EFFORT`)로 배포 없이 바꾸거나 `anthropic.js`의 `PINNED_MODEL`을 올린다. 서버가 켜질 때 모델 목록 API를 한 번 보고(`resolveModel`, 토큰 0) 더 새 Opus가 있으면 `/api/status.model.newer`로 내려 화면 상태줄에 알린다. `CLAUDE_MODEL=auto`면 켜질 때 가장 새 Opus를 골라 쓴다(Fable·Sonnet은 후보 아님). 기본은 알림만 — 세대가 바뀌면 API 규칙·값·글 결이 같이 바뀔 수 있어 한 강 돌려 보고 바꾼다. `test/model.test.js`. Opus 5.5는 사고가 항상 켜져 있어 `thinking`을 끄거나 `temperature`·prefill·강제 `tool_choice`를 보내면 400이다 — 지금 코드는 아무것도 안 보낸다.
 - 한국어 출력이 기니 `max_tokens`는 4000 이상.
 
 ## 코딩 컨벤션

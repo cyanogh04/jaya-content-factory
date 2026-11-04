@@ -14,18 +14,83 @@ const API_VERSION = '2023-06-01';
 //   2026-09-04 캐러셀·캡쳐도 sonnet-4-6 → opus-4-8로 올림(기획 품질 우선). 2026-11-04 opus-4-8 → opus-5-5
 //   (후속 모델이고 더 싸다: 입력 $4/출력 $20 per 1M vs $5/$25). 모델 ID는 코드에 박혀 있어 저절로 바뀌지 않는다 —
 //   새 모델이 나오면 .env의 CLAUDE_MODEL(Render 환경변수)로 배포 없이 바꾸거나 아래 기본값을 올린다.
-const DEFAULT_MODEL = process.env.CLAUDE_MODEL || 'claude-opus-5-5';
-export const MODELS = {
-  VOICE: DEFAULT_MODEL,
-  CAFE: DEFAULT_MODEL,
-  CAPTION: DEFAULT_MODEL,
-  CAROUSEL: DEFAULT_MODEL,
-  CAPTURE: DEFAULT_MODEL,
-};
-
+//   CLAUDE_MODEL=auto 면 서버가 켜질 때 모델 목록 API에서 가장 새 Opus를 골라 쓴다(resolveModel).
+//   고정 모드에서도 켜질 때 목록을 한 번 보고, 더 새 Opus가 있으면 화면 상태줄에 알린다(저절로 바꾸지는 않는다 —
+//   세대가 바뀌면 API 규칙·값·글 결이 같이 바뀔 수 있어 한 강 돌려 보고 바꾸는 게 안전하다).
 // 사고 깊이 — Opus 5.5는 사고(thinking)가 항상 켜져 있고 effort로만 조절한다(기본 medium).
 // 기획·글쓰기라 high로 둔다. CLAUDE_EFFORT=low|medium|high|xhigh|max 로 바꿀 수 있다.
 const EFFORT = process.env.CLAUDE_EFFORT || 'high';
+
+export const PINNED_MODEL = 'claude-opus-5-5';
+const CONFIGURED_MODEL = (process.env.CLAUDE_MODEL || '').trim() || PINNED_MODEL;
+let activeModel = CONFIGURED_MODEL === 'auto' ? PINNED_MODEL : CONFIGURED_MODEL;
+export const MODELS = {
+  get VOICE() { return activeModel; },
+  get CAFE() { return activeModel; },
+  get CAPTION() { return activeModel; },
+  get CAROUSEL() { return activeModel; },
+  get CAPTURE() { return activeModel; },
+};
+
+/** 모델 목록 API에서 받은 모델들 중 가장 새 Opus — 없으면 null. (Fable·Sonnet은 값·용도가 달라 후보에 넣지 않는다) */
+export function latestOpus(models) {
+  const opus = (models || []).filter((m) => typeof m?.id === 'string' && /^claude-opus-\d/.test(m.id) && m.created_at);
+  if (opus.length === 0) return null;
+  return opus.reduce((a, b) => (new Date(b.created_at) > new Date(a.created_at) ? b : a));
+}
+
+/**
+ * 설정과 모델 목록으로 "무엇을 쓸지·알릴 것이 있는지"를 정한다 — 순수 함수(테스트용).
+ * @returns {{ model: string, mode: 'auto'|'pinned', latest: object|null, newer: object|null }}
+ *   newer: 고정 모드에서 지금 쓰는 것보다 새 Opus가 있으면 그 모델(알림용), 아니면 null
+ */
+export function pickModel({ configured, models }) {
+  const latest = latestOpus(models);
+  if (configured === 'auto') {
+    return { model: latest?.id || PINNED_MODEL, mode: 'auto', latest, newer: null };
+  }
+  const current = (models || []).find((m) => m.id === configured);
+  const newer =
+    latest && latest.id !== configured && (!current?.created_at || new Date(latest.created_at) > new Date(current.created_at))
+      ? latest
+      : null;
+  return { model: configured, mode: 'pinned', latest, newer };
+}
+
+let modelStatus = { model: activeModel, mode: CONFIGURED_MODEL === 'auto' ? 'auto' : 'pinned', latest: null, newer: null, checked: false, error: null };
+
+/** 지금 쓰는 모델·모드·새 모델 알림 — /api/status가 화면에 내려 준다 (모델 객체는 id·이름·날짜만) */
+export function getModelStatus() {
+  const lite = (m) => (m ? { id: m.id, display_name: m.display_name, created_at: m.created_at } : null);
+  return { ...modelStatus, latest: lite(modelStatus.latest), newer: lite(modelStatus.newer), effort: EFFORT };
+}
+
+/**
+ * 서버 시작 때 한 번 — 모델 목록 API(토큰 0)를 보고 auto면 가장 새 Opus로 바꾸고, 고정이면 새 Opus가 있는지만 적어 둔다.
+ * 목록 조회가 실패해도 생성은 막지 않는다(설정된 모델 그대로).
+ */
+export async function resolveModel() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return getModelStatus();
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/models?limit=100', {
+      headers: { 'x-api-key': apiKey, 'anthropic-version': API_VERSION },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { data } = await res.json();
+    const picked = pickModel({ configured: CONFIGURED_MODEL, models: data });
+    activeModel = picked.model;
+    modelStatus = { ...picked, checked: true, error: null };
+    if (picked.mode === 'auto') console.log(`모델: 자동 선택 — 가장 새 Opus ${picked.model} (${picked.latest?.created_at?.slice(0, 10) || '날짜 미상'})`);
+    else if (picked.newer) console.log(`모델: ${picked.model} 사용 중 — 더 새 Opus ${picked.newer.id}(${picked.newer.created_at.slice(0, 10)})가 있습니다. CLAUDE_MODEL로 바꿀 수 있어요.`);
+    else console.log(`모델: ${picked.model} (가장 새 Opus)`);
+  } catch (err) {
+    modelStatus = { ...modelStatus, checked: false, error: err.message };
+    console.warn(`모델 목록 조회 실패(${err.message}) — 설정된 모델 ${activeModel} 그대로 씁니다.`);
+  }
+  return getModelStatus();
+}
 
 /**
  * Claude 호출.
