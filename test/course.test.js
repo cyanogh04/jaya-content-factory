@@ -4,6 +4,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+process.env.JAYA_LESSONS_SCOPE = 'system-edit-notes-test-none'; // 실제 '수정에서 배운 것'이 이 테스트의 프롬프트에 실리지 않게
 import path from 'node:path';
 
 // ── 1. 순수 헬퍼 ────────────────────────────────────────────

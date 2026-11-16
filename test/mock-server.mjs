@@ -6,6 +6,8 @@ import path from 'node:path';
 
 // 가짜 모델이 실제로 저장된 같은 시리즈 작업의 강의 지도를 다시 만들어 덮지 않게 — 시리즈 이유 가져오기를 끈다(generate.js seriesWhyBlock)
 process.env.JAYA_NO_SERIES = '1';
+// '수정에서 배운 것'도 실제 노트와 따로 둔다(lessons.js) — 가짜 모델이 쓴 노트가 실제 기획에 실리지 않게
+process.env.JAYA_LESSONS_SCOPE = 'system-edit-notes-mock';
 const root = process.cwd();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const url = (p) => pathToFileURL(path.join(root, p)).href;
@@ -13,8 +15,14 @@ const url = (p) => pathToFileURL(path.join(root, p)).href;
 mock.module(url('src/anthropic.js'), {
   namedExports: {
     MODELS: { VOICE: 'x', CAFE: 'x', CAPTION: 'x', CAROUSEL: 'x', CAPTURE: 'x' },
+    resolveModel: async () => ({}),
+    getModelStatus: () => ({ model: '가짜 모델', mode: 'pinned', effort: 'high', latest: null, newer: null, checked: false, error: null }),
     callClaude: async ({ step }) => {
       await sleep(1200);
+      // 직접 수정 저장의 뒤따르는 호출들 — 배우기(노트), 캡쳐 자리 맞추기(📷 줄 바꿈 목록), 캡션 맞추기
+      if (step === '수정에서 배우기') return '- 본문을 "~해요"로 끝맺는다 — 예: 배웁니다 → 배워요 (1회)\n- 덤 컷은 하나만 둔다 (1회)';
+      if (step === '캡쳐 자리 맞추기') return '[{"before": "📷 캡쳐 2 [3강 12:00] 완성 장면", "after": "📷 캡쳐 2 [03:20] 고친 본문에 맞는 장면"}]';
+      if (step === '인스타 캡션 결 맞추기') return '가짜 캡션 — 고친 캐러셀에 맞춰 다시 쓴 글\n\n같이 만들어요~';
       if (step === '강의 파악') return '- 수업 이름: 자야쌤의 크롭데님쟈켓 수업\n- 강의 한 줄: 가짜 강의 지도\n- 이렇게 만드는 이유: 없음\n- 검색어 후보: 청자켓 만들기';
       if (step === '강좌 파악') return '- 수업 이름: 자야쌤의 크롭데님쟈켓 수업\n- 강의 한 줄: 청자켓을 재단부터 완성까지 배우는 수업이다\n- 강별 배움:\n  1강 — 원단 결 잡기와 재단\n  2강 — 몸판 주머니와 커프스\n  3강 — 칼라와 마무리\n- 전체 흐름: 1강에서 재단, 2강에서 몸판, 3강에서 완성\n- 이렇게 만드는 이유: 없음\n- 검색어 후보: 청자켓 만들기';
       if (step.includes('캐러셀')) return `# 인스타 캐러셀 기획안 — 크롭데님쟈켓\n\n## 기획 개요\n- **총 컷 수**: 10컷\n- **후크 후보**:\n  · A안 [공감형] 청자켓 만들다 멈춘 적 있으시죠? → 속마음\n  · B안 [반전형] 심지가 답이 아니었어요. → 통념 부정\n  · C안 [위기형] 다음 자켓에서도 거기서 멈춰요. → 서늘함\n  · 채택: A안 → 자막 근거가 세다\n\n${Array.from({ length: 10 }, (_, i) => `## CUT ${i + 1} — 역할: learn\n**카드 텍스트**\n- 헤드카피: ${i + 1}번째 컷이에요.\n- 서브카피: 가짜 서브카피예요.\n- 본문: 가짜 본문이에요.`).join('\n\n')}`;

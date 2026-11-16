@@ -88,7 +88,7 @@ export async function listJobs(limit = 50) {
       .order('created_at', { ascending: false })
       .limit(limit);
     if (error) throw new Error(`${step}: Supabase 오류 — ${error.message}`);
-    return (data || []).map(withKind);
+    return (data || []).filter(notSystem).map(withKind);
   }
   // 파일 폴백
   let entries;
@@ -103,10 +103,15 @@ export async function listJobs(limit = 50) {
     const job = await readJsonSafe(path.join(OUTPUTS_DIR, entry.name, 'job.json'));
     if (!job) continue;
     const { transcript_compressed, transcript_full, ...lite } = job;
-    jobs.push(withKind(lite));
+    if (notSystem(lite)) jobs.push(withKind(lite));
   }
   jobs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   return jobs.slice(0, limit);
+}
+
+/** 시스템 작업(video_id 'system-…' — lessons.js가 '수정에서 배운 것'을 쌓아 두는 행)은 사람이 여는 작업이 아니다 */
+function notSystem(job) {
+  return !(typeof job.video_id === 'string' && job.video_id.startsWith('system-'));
 }
 
 /** 목록용 — 강좌 작업(video_id 'course-…')인지와 강 수(vimeo_url의 줄 수)를 붙인다 */
@@ -234,6 +239,18 @@ export async function getContents(jobId) {
 
 /** 특정 타입의 최신 버전 콘텐츠 조회 (없으면 null) */
 export async function getLatestContent(jobId, type) {
+  if (supabase) {
+    // 그 종류의 최신 한 줄만 가져온다 — '수정에서 배운 것'처럼 버전이 계속 쌓이는 행을 매번 통째로 읽지 않게
+    const { data, error } = await supabase
+      .from('contents')
+      .select('*')
+      .eq('job_id', jobId)
+      .eq('type', type)
+      .order('version', { ascending: false })
+      .limit(1);
+    if (error) throw new Error(`DB 조회(content): Supabase 오류 — ${error.message}`);
+    return data && data.length > 0 ? data[0] : null;
+  }
   const all = await getContents(jobId);
   const filtered = all.filter((c) => c.type === type);
   if (filtered.length === 0) return null;

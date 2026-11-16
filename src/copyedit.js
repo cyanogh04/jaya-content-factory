@@ -89,7 +89,7 @@ export function applyReview(content, edits) {
  * @param {string} [o.label]
  * @returns {Promise<string>}
  */
-export async function reviewCardCopy({ content, lectureMap, previous, instruction, label = '캐러셀 기획' }) {
+export async function reviewCardCopy({ content, lectureMap, previous, instruction, lessons, label = '캐러셀 기획' }) {
   if (!content || !/^##\s*CUT\s*\d+/m.test(content)) return content;
   let onlyCuts;
   if (previous) {
@@ -102,7 +102,7 @@ export async function reviewCardCopy({ content, lectureMap, previous, instructio
     const raw = await callClaude({
       model: MODELS.CAROUSEL,
       system: COMMON_HEADER,
-      prompt: buildCardCopyReviewPrompt({ plan: content, lectureMap, instruction, onlyCuts }),
+      prompt: buildCardCopyReviewPrompt({ plan: content, lectureMap, instruction, onlyCuts, lessons }),
       step: `${label} 카드 카피 교정`,
     });
     const edits = parseReview(raw).filter((e) => !onlyCuts || onlyCuts.includes(e.cut));

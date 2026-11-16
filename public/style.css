@@ -629,3 +629,68 @@ button { cursor: pointer; }
   .ws-actions { padding-top: 0; }
   .tab-pair { display: none; }
 }
+
+/* ─── 직접 수정 (2026-11-17) — 카드에서 바로 고쳐 저장 ─────────────── */
+.btn-edit { background: var(--surface); color: var(--ink); border-color: var(--line-2); font-size: .8rem; padding: 6px 11px; }
+.btn-edit:not(:disabled):hover { border-color: var(--ink); background: var(--surface-2); }
+.card.is-editing { border-color: var(--ink); box-shadow: 0 0 0 2px rgba(24, 40, 78, .08), var(--shadow); }
+.card-body.is-editing { padding: 0; overflow: hidden; display: flex; max-height: none; }
+.edit-area {
+  flex: 1;
+  width: 100%;
+  height: 68vh;
+  min-height: 320px;
+  padding: 14px 18px;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  background: #fffef8;
+  color: var(--text);
+  font-family: inherit;
+  font-size: .9rem;
+  line-height: 1.8;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+.edit-area[readonly] { opacity: .6; }
+.edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  padding: 11px 16px 13px;
+  border-top: 1px solid var(--line);
+  background: #f3f5fa;
+  border-radius: 0 0 var(--r) var(--r);
+}
+.edit-note { flex: 1 1 240px; font-size: .8rem; color: var(--muted); line-height: 1.5; margin: 0; }
+.edit-actions { display: flex; gap: 8px; margin-left: auto; }
+.edit-actions .btn { font-size: .86rem; padding: 8px 16px; }
+
+/* 수정에서 배운 것 */
+.modal-wide { width: min(760px, 94vw); max-height: 90vh; overflow-y: auto; }
+.lessons-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.lessons-tab {
+  padding: 7px 13px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: .84rem;
+  cursor: pointer;
+}
+.lessons-tab.is-on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.lessons-area { height: 240px; line-height: 1.7; }
+.lessons-examples { display: flex; flex-direction: column; gap: 8px; }
+.lessons-examples-title { font-size: .8rem; font-weight: 700; color: var(--ink); }
+.lessons-example { font-size: .82rem; line-height: 1.6; padding: 8px 11px; border: 1px solid var(--line); border-radius: var(--r-sm); background: #fbf8f1; white-space: pre-wrap; word-break: break-word; }
+.lessons-example .was { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(111, 106, 98, .5); }
+.lessons-meta { margin-right: auto; font-size: .8rem; color: var(--muted); align-self: center; }
+@media (max-width: 720px) {
+  .edit-area { height: 56vh; }
+  .edit-actions { margin-left: 0; width: 100%; }
+  .edit-actions .btn { flex: 1; }
+}
+/* 카드 머리에 '직접 수정'이 들어가 좁은 카드에서 '복사'가 다음 줄로 밀린다 — 버전 선택 칸이 대신 줄어들게 */
+.card-head .version-select { flex: 1 1 110px; min-width: 96px; max-width: 200px; }

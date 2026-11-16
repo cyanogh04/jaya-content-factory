@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+process.env.JAYA_LESSONS_SCOPE = 'system-edit-notes-test-none'; // 실제 '수정에서 배운 것'이 이 테스트의 프롬프트에 실리지 않게
 const CONCEPT = '컨셉테스트-결잡기-하나로-관통-7f3a';
 const MARK = '[기획 컨셉 —';
 const MAP_MARK = '[강의 지도 —';

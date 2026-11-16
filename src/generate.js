@@ -23,12 +23,14 @@ import {
   buildCourseMapPrompt,
   buildRevisePrompt,
   buildRegeneratePrompt,
+  buildCafeCaptureSyncPrompt,
   CAROUSEL_CUT_MIN,
   CAROUSEL_CUT_MAX,
   MAP_WHY_ITEM,
 } from './prompts.js';
-import { saveJob, saveContent, getJob, getLatestContent, findJobByVideoId, listJobs } from './db.js';
-import { reviewCardCopy } from './copyedit.js';
+import { saveJob, saveContent, getJob, getContents, getLatestContent, findJobByVideoId, listJobs } from './db.js';
+import { reviewCardCopy, cardTextByCut } from './copyedit.js';
+import { loadAllLessons, learnFromEdit, editPairs, LESSON_TYPES } from './lessons.js';
 import {
   COURSE_TYPE,
   COURSE_MAX_LECTURES,
@@ -276,13 +278,13 @@ export function normalizeCarouselCuts(content, label = '캐러셀 기획') {
  * @param {string} o.label 로그 접두어
  * @returns {Promise<string>} 최종 기획안
  */
-export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, lectureMap, course, label, previous, instruction }) {
-  const fitted = await fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, course, label });
+export async function finalizeCarousel({ content, job, voice, cafe, caption, concept, lectureMap, course, lessons, label, previous, instruction }) {
+  const fitted = await fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, course, lessons, label });
   // 카드 텍스트는 캐러셀 공장이 그대로 카드에 찍는다 — 마지막 교정자 한 번(수정이면 바뀐 컷만)
-  return reviewCardCopy({ content: fitted, lectureMap, previous, instruction, label });
+  return reviewCardCopy({ content: fitted, lectureMap, previous, instruction, lessons, label });
 }
 
-async function fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, course, label }) {
+async function fitCutCount({ content, job, voice, cafe, caption, concept, lectureMap, course, lessons, label }) {
   let { content: fixed, count } = normalizeCarouselCuts(content, label);
   const inRange = (n) => n >= CAROUSEL_CUT_MIN && n <= CAROUSEL_CUT_MAX;
   if (count === 0 || inRange(count)) return fixed;
@@ -312,6 +314,7 @@ async function fitCutCount({ content, job, voice, cafe, caption, concept, lectur
       caption,
       lectureMap,
       course,
+      lessons,
     }),
     transcript: job.transcript_full || job.transcript_compressed,
     step: `${label} 컷 수 조정`,
@@ -326,25 +329,25 @@ async function fitCutCount({ content, job, voice, cafe, caption, concept, lectur
 }
 
 /** 섹션별 호출 사양 구성 */
-function buildSectionSpecs({ voice, topic, concept, lectureMap, planMap, course, compressed, full }) {
+function buildSectionSpecs({ voice, topic, concept, lectureMap, planMap, course, lessons, compressed, full }) {
   return [
     {
       type: 'cafe',
       model: MODELS.CAFE,
       transcript: compressed,
-      prompt: buildCafePrompt({ voice, topic, concept, course, lectureMap }),
+      prompt: buildCafePrompt({ voice, topic, concept, course, lectureMap, lessons: lessons.cafe }),
     },
     {
       type: 'caption',
       model: MODELS.CAPTION,
       transcript: full, // 강의 정체를 잡아야 하므로 원본 자막 (지도와 함께)
-      prompt: buildCaptionPrompt({ voice, topic, concept, lectureMap: planMap, course }),
+      prompt: buildCaptionPrompt({ voice, topic, concept, lectureMap: planMap, course, lessons: lessons.caption }),
     },
     {
       type: 'carousel',
       model: MODELS.CAROUSEL,
       transcript: full,
-      prompt: buildCarouselPrompt({ voice, topic, concept, lectureMap: planMap, course }),
+      prompt: buildCarouselPrompt({ voice, topic, concept, lectureMap: planMap, course, lessons: lessons.carousel }),
     },
     {
       type: 'capture',
@@ -368,6 +371,7 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
   // 캡션·캐러셀은 같은 시리즈 다른 강의 '이렇게 만드는 이유'까지 붙인 지도를 받는다(카페·캡쳐는 이전 그대로)
   const planMap = lectureMap + (await seriesWhyBlock(job));
   const course = await loadCourse(job.id); // 강좌 작업이면 4종 전부에 강좌 블록을 싣는다
+  const lessons = await loadAllLessons(); // 자야쌤이 지난 기획들을 손으로 고친 것에서 배운 것(카페·캡션·캐러셀)
 
   const specs = buildSectionSpecs({
     voice,
@@ -376,6 +380,7 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
     lectureMap,
     planMap,
     course,
+    lessons,
     compressed: job.transcript_compressed,
     full: job.transcript_full,
   });
@@ -393,7 +398,7 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
         spec.type === 'capture'
           ? buildCapturePrompt({ cafe: results.cafe, concept, course, lectureMap })
           : spec.type === 'carousel'
-            ? buildCarouselPrompt({ voice, topic, concept, lectureMap: planMap, caption: results.caption, course })
+            ? buildCarouselPrompt({ voice, topic, concept, lectureMap: planMap, caption: results.caption, course, lessons: lessons.carousel })
             : spec.prompt;
       let content = await callClaude({
         model: spec.model,
@@ -404,7 +409,7 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
       });
       if (spec.type === 'carousel') {
         content = await finalizeCarousel({
-          content, job, voice, cafe: results.cafe, caption: results.caption, concept, lectureMap: planMap, course, label,
+          content, job, voice, cafe: results.cafe, caption: results.caption, concept, lectureMap: planMap, course, lessons: lessons.carousel, label,
         });
       }
       await saveContent(job.id, spec.type, content);
@@ -666,6 +671,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
   const usesMap = type === 'caption' || type === 'carousel' || !!course;
   const lectureMap = usesMap ? (await ensureLectureMap(job)) + (type === 'cafe' ? '' : await seriesWhyBlock(job)) : undefined;
   const transcript = usesMap ? job.transcript_full || job.transcript_compressed : job.transcript_compressed;
+  const lessons = await loadAllLessons();
 
   // 캐러셀 수정은 확정된 카페·캡션을 컨텍스트로 넣는다(없으면 자막만으로 진행).
   let extra = {};
@@ -682,13 +688,13 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
   let content = await callClaude({
     model: REVISE_MODELS[type],
     system: COMMON_HEADER,
-    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, concept, lectureMap, course, ...extra }),
+    prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, concept, lectureMap, course, lessons: lessons[type], ...extra }),
     transcript,
     step: `${label} 수정`,
   });
   if (type === 'carousel') {
     content = await finalizeCarousel({
-      content, job, voice, cafe: extra.cafe, caption: extra.caption, concept, lectureMap, course, label: `${label} 수정`,
+      content, job, voice, cafe: extra.cafe, caption: extra.caption, concept, lectureMap, course, lessons: lessons.carousel, label: `${label} 수정`,
       previous: latest.content, instruction,
     });
   }
@@ -747,6 +753,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
             lectureMap,
             course,
             carousel: content,
+            lessons: lessons.caption,
           }),
           transcript,
           step: '인스타 캡션 결 맞추기',
@@ -785,18 +792,19 @@ export async function regenerateSecondary({ jobId }) {
   const lectureMap = await ensureLectureMap(job);
   const planMap = lectureMap + (await seriesWhyBlock(job));
   const course = await loadCourse(jobId);
+  const lessons = await loadAllLessons();
   const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined, concept, course };
 
   console.log('캐러셀 기획 재생성 중...');
   let carousel = await callClaude({
     model: MODELS.CAROUSEL,
     system: COMMON_HEADER,
-    prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice, lectureMap: planMap }),
+    prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice, lectureMap: planMap, lessons: lessons.carousel }),
     transcript: job.transcript_full || job.transcript_compressed,
     step: '캐러셀 기획 재생성',
   });
   carousel = await finalizeCarousel({
-    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, lectureMap: planMap, course, label: '캐러셀 기획 재생성',
+    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, lectureMap: planMap, course, lessons: lessons.carousel, label: '캐러셀 기획 재생성',
   });
   await saveContent(jobId, 'carousel', carousel);
   console.log('캐러셀 기획 재생성 완료');
@@ -813,4 +821,185 @@ export async function regenerateSecondary({ jobId }) {
   console.log('캡쳐 가이드 재생성 완료');
 
   return { carousel, capture };
+}
+
+// ───────────────────────── 손으로 고친 글 저장 (2026-11-17) ─────────────────────────
+// 기획안은 대부분 그대로 못 쓰고 고쳐 쓴다. 전에는 화면에서 고칠 수도, 고친 것을 저장할 수도 없어 문서로 옮겨 고친 뒤 그대로 흩어졌다.
+// 이제 화면에서 고쳐 저장하면 (1) 새 버전으로 남고 (2) 짝이 따라온다 — 캐러셀을 고치면 캡션이 그 내용에 맞게 다시 써지고,
+// 카페 글을 고치면 📷 캡쳐 자리와 캡쳐 가이드가 본문에 맞게 바뀐다 (3) 고친 방향을 배워 다음 기획에 싣는다(lessons.js).
+
+const EDITABLE_TYPES = ['cafe', 'caption', 'carousel', 'capture'];
+
+/** 📷 줄을 뺀 본문 — 캡쳐 자리 말고 본문이 바뀌었는지 볼 때 쓴다 */
+function withoutMarkers(text) {
+  return String(text || '').split('\n').filter((l) => !l.includes('📷')).map((l) => l.trim()).filter(Boolean).join('\n');
+}
+
+/** 캡쳐 자리 맞추기 응답(JSON 배열)을 읽는다. 형식이 깨졌으면 빈 배열 */
+export function parseMarkerSync(raw) {
+  const m = String(raw || '').match(/\[[\s\S]*\]/);
+  if (!m) return [];
+  try {
+    const arr = JSON.parse(m[0]);
+    return (Array.isArray(arr) ? arr : []).filter((e) => e && typeof e.before === 'string' && typeof e.after === 'string' && e.before.trim());
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 모델이 고치자고 한 📷 줄만 카페 글에 끼운다 — 본문은 자야쌤이 고친 그대로 둔다.
+ * before가 글 속 📷 줄과 글자 그대로 같을 때만, after가 📷 줄이고 그 시각이 자막에 실제로 있을 때만 바꾼다(빈 after는 그 줄을 지운다).
+ * @returns {{ content: string, applied: Array<{ before: string, after: string }> }}
+ */
+export function applyMarkerSync(cafe, edits, transcript) {
+  const lines = String(cafe || '').split('\n');
+  const applied = [];
+  for (const e of edits) {
+    const before = e.before.trim();
+    const after = e.after.trim();
+    if (!before.includes('📷') || before === after) continue;
+    const idx = lines.findIndex((l) => l.trim() === before);
+    if (idx < 0) continue;
+    if (!after) {
+      lines.splice(idx, 1);
+      if (lines[idx - 1] !== undefined && lines[idx] !== undefined && !lines[idx - 1].trim() && !lines[idx].trim()) lines.splice(idx, 1); // 빈 줄이 겹치지 않게
+      applied.push({ before, after: '' });
+      continue;
+    }
+    const stamp = after.match(/\[((?:\d+강\s*)?\d{1,3}:\d{2})\]/);
+    if (!after.includes('📷') || !stamp || !String(transcript || '').includes(`[${stamp[1]}]`)) continue; // 자막에 없는 시각은 받지 않는다
+    lines[idx] = lines[idx].replace(before, after);
+    applied.push({ before, after });
+  }
+  return { content: lines.join('\n'), applied };
+}
+
+/**
+ * 화면에서 손으로 고친 글을 새 버전으로 저장하고, 짝을 맞추고, 고친 방향을 배운다.
+ *
+ * @param {object} o
+ * @param {string} o.jobId
+ * @param {'cafe'|'caption'|'carousel'|'capture'} o.type
+ * @param {string} o.content 고친 글 전문
+ * @param {number} [o.baseVersion] 고치기 시작한 버전(옛 버전을 열어 고쳤을 수 있다). 없으면 최신
+ * @param {boolean} [o.alignCaption=true] 캐러셀을 고쳤을 때 캡션도 그 내용에 맞게 다시 쓸지
+ * @returns {Promise<{ content: string, version: number, unchanged?: boolean, caption?: string|null, captionError?: string|null,
+ *   capture?: string|null, captureError?: string|null, markersMoved?: number, learning?: boolean }>}
+ */
+export async function saveManualEdit({ jobId, type, content, baseVersion, alignCaption = true }) {
+  const step = '직접 수정 저장';
+  if (!EDITABLE_TYPES.includes(type)) throw new Error(`${step}: 고칠 수 있는 글이 아닙니다 — ${type}`);
+  let text = String(content || '').replace(/\r\n/g, '\n').trim();
+  if (!text) throw new Error(`${step}: 내용이 비어 있습니다. 글을 통째로 지우려던 게 아니라면 취소하고 다시 열어 주세요.`);
+
+  const job = await getJob(jobId);
+  if (!job) throw new Error(`${step}: 작업(${jobId})을 찾을 수 없습니다.`);
+  const rows = (await getContents(jobId)).filter((c) => c.type === type);
+  if (rows.length === 0) throw new Error(`${step}: 아직 만들지 않은 ${TYPE_LABELS[type]}입니다. 먼저 생성을 완료하세요.`);
+  const latest = rows.reduce((a, b) => (a.version >= b.version ? a : b));
+  const base = rows.find((c) => c.version === baseVersion) || latest; // 자야쌤이 고치기 시작한 글 — 무엇을 고쳤는지는 이것과 견준다
+  const label = TYPE_LABELS[type];
+
+  if (text === latest.content.trim()) return { content: latest.content, version: latest.version, unchanged: true };
+
+  const edited = text; // 자야쌤이 쓴 그대로 — 배우기는 이 글로 한다(아래에서 코드·모델이 손댄 것은 배우지 않는다)
+  if (type === 'carousel') text = normalizeCarouselCuts(text, `${label} 직접 수정`).content; // 컷을 지우거나 보탰으면 개요의 총 컷 수만 맞춘다
+
+  const voice = type === 'carousel' || type === 'cafe' ? await loadVoice() : null;
+  const concept = await loadConcept(jobId);
+  const course = await loadCourse(jobId);
+  const out = { caption: null, captionError: null, capture: null, captureError: null, markersMoved: 0 };
+
+  // ── 카페 글: 본문을 고쳤으면 📷 캡쳐 자리가 아직 본문과 맞는지 보고, 안 맞는 줄만 옮긴다 ──
+  if (type === 'cafe' && text.includes('📷') && withoutMarkers(text) !== withoutMarkers(base.content)) {
+    console.log('카페 글 직접 수정 → 📷 캡쳐 자리가 본문과 맞는지 확인 중...');
+    try {
+      const transcript = job.transcript_full || job.transcript_compressed;
+      const raw = await callClaude({
+        model: MODELS.CAPTURE,
+        system: COMMON_HEADER,
+        prompt: buildCafeCaptureSyncPrompt({ cafe: text, pairs: editPairs('cafe', withoutMarkers(base.content), withoutMarkers(text)), course }),
+        transcript,
+        step: '캡쳐 자리 맞추기',
+      });
+      const synced = applyMarkerSync(text, parseMarkerSync(raw), transcript);
+      synced.applied.forEach((e) => console.log(`  ${e.before} → ${e.after || '(지움)'}`));
+      text = synced.content;
+      out.markersMoved = synced.applied.length;
+    } catch (err) {
+      // 고친 글 저장이 먼저다 — 캡쳐 자리 확인이 실패해도 글은 저장한다
+      console.error(`캡쳐 자리 맞추기 실패: ${err.message}`);
+      out.captureError = err.message;
+    }
+  }
+
+  const row = await saveContent(jobId, type, text);
+  console.log(`${label} 직접 수정 저장 (버전 ${row.version})`);
+
+  // ── 카페 글: 📷 자리가 달라졌으면(자야쌤이 옮겼든 위에서 맞췄든) 캡쳐 가이드를 다시 맞춘다 ──
+  if (type === 'cafe' && captureMarkers(latest.content) !== captureMarkers(text) && (await getLatestContent(jobId, 'capture'))) {
+    console.log('카페 캡쳐 자리가 바뀜 → 캡쳐 가이드 갱신 중...');
+    try {
+      const lectureMap = course ? await ensureLectureMap(job) : undefined;
+      out.capture = await callClaude({
+        model: MODELS.CAPTURE,
+        system: COMMON_HEADER,
+        prompt: buildCapturePrompt({ cafe: text, concept, course, lectureMap }),
+        transcript: job.transcript_full,
+        step: '캡쳐 가이드 갱신',
+      });
+      await saveContent(jobId, 'capture', out.capture);
+      console.log('캡쳐 가이드 갱신 완료');
+    } catch (err) {
+      console.error(`캡쳐 가이드 갱신 실패: ${err.message}`);
+      out.captureError = err.message;
+    }
+  }
+
+  // ── 캐러셀: 카드에 찍히는 글이나 후크 채택안을 고쳤으면 짝 캡션을 그 내용에 맞게 다시 쓴다 ──
+  if (type === 'carousel' && alignCaption) {
+    const cardsBefore = [...cardTextByCut(latest.content).values()].join('\n');
+    const cardsAfter = [...cardTextByCut(text).values()].join('\n');
+    const hookBefore = adoptedHook(latest.content);
+    const hookAfter = adoptedHook(text);
+    const changed = cardsBefore !== cardsAfter || hookBefore?.key !== hookAfter?.key;
+    const captionRow = changed ? await getLatestContent(jobId, 'caption') : null;
+    if (captionRow) {
+      console.log('캐러셀 직접 수정 → 인스타 캡션을 고친 내용에 맞추는 중...');
+      try {
+        const pairs = editPairs('carousel', latest.content, text);
+        const lessons = await loadAllLessons();
+        const lectureMap = (await ensureLectureMap(job)) + (await seriesWhyBlock(job));
+        const instruction =
+          '자야쌤이 짝꿍 캐러셀 기획안을 손으로 고쳤다. 이 캡션은 그 카드와 같은 게시물에 실리니, 고친 카드와 어긋나는 곳을 맞춘다.\n' +
+          '- 카드에서 뺀 이야기는 캡션에서도 빼고, 카드에 새로 넣은 이야기는 캡션에도 넣는다. 카드에서 바꾼 표현·바꾼 순서를 캡션이 따라간다.\n' +
+          '- 자야쌤이 카드에서 고친 말의 방향(더 쉬운 말, 더 짧은 문장 등)이 보이면 캡션도 같은 방향으로 고친다. 캡션은 자야쌤이 직접 말하는 글이라 말투는 캡션의 말투 그대로.\n' +
+          '- 1컷 후크가 바뀌었으면 첫 두 줄을 같은 소재·같은 감정으로 다시 쓰고, 이어지는 문단이 그 첫 줄을 받게 손본다. 헤드카피를 그대로 베끼지 않는다.\n' +
+          '- 고친 카드와 어긋나지 않는 문단은 그대로 둔다.\n' +
+          '[자야쌤이 카드에서 고친 곳]\n' +
+          (pairs.map((p, i) => `${i + 1}. ${p.where ? `[${p.where}] ` : ''}전: ${p.before}\n   후: ${p.after}`).join('\n') || '(개요의 후크 채택안을 바꿈)');
+        out.caption = await callClaude({
+          model: MODELS.CAPTION,
+          system: COMMON_HEADER,
+          prompt: buildRevisePrompt({
+            type: 'caption', original: captionRow.content, instruction, voice, concept, lectureMap, course, carousel: text, lessons: lessons.caption,
+          }),
+          transcript: job.transcript_full || job.transcript_compressed,
+          step: '인스타 캡션 결 맞추기',
+        });
+        await saveContent(jobId, 'caption', out.caption);
+        console.log('인스타 캡션 결 맞추기 완료');
+      } catch (err) {
+        console.error(`인스타 캡션 결 맞추기 실패: ${err.message}`);
+        out.captionError = err.message;
+      }
+    }
+  }
+
+  // ── 고친 방향 배우기 — 응답을 기다리게 하지 않고 뒤에서 돈다 ──
+  const learning = LESSON_TYPES.includes(type) && editPairs(type, base.content, edited).length > 0;
+  if (learning) learnFromEdit({ type, before: base.content, after: edited }).catch(() => {});
+
+  return { content: text, version: row.version, ...out, learning };
 }

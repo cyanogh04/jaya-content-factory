@@ -1,6 +1,8 @@
 // public/app.js — 자야쌤 콘텐츠 공장 프론트엔드
 // 작업함(지난 작업) + 새 기획(강의 하나 / 강좌 묶기 2~4강) + 작업 공간(짝으로 묶인 결과 탭)
 // SSE(POST) 수신, 섹션별 렌더링, 수정 요청, 저장된 버전 오가기, 캐러셀·캡쳐 재생성, 전체 기획 다시하기
+// 2026-11-17: 카드에서 바로 고쳐 저장(직접 수정) — 캐러셀을 고치면 캡션이, 카페 글을 고치면 캡쳐 자리·가이드가 따라오고,
+// 고친 방향은 서버가 배워 다음 기획에 싣는다('수정에서 배운 것' 창에서 보고 고칠 수 있다).
 //
 // 2026-11-04: 강좌 묶기 추가와 함께 화면을 작업함/작업 공간으로 다시 짰다. 결과는 짝으로 탭에 놓는다 —
 // 카페 글(카페 서머리 | 캡쳐 가이드: 📷 자리로 이어짐), 인스타 게시물(캐러셀 기획 | 캡션: 같은 게시물).
@@ -120,6 +122,16 @@ function bindEvents() {
   ['cafe', 'caption', 'carousel'].forEach((type) => {
     $(`revise-${type}`).addEventListener('keydown', (e) => { if (e.key === 'Enter') handleRevise(type); });
   });
+
+  document.querySelectorAll('.btn-edit').forEach((btn) => btn.addEventListener('click', () => startEdit(btn.dataset.type)));
+  document.querySelectorAll('.btn-save-edit').forEach((btn) => btn.addEventListener('click', () => saveEdit(btn.dataset.type)));
+  document.querySelectorAll('.btn-cancel-edit').forEach((btn) => btn.addEventListener('click', () => cancelEdit(btn.dataset.type)));
+  window.addEventListener('beforeunload', (e) => { if (anyDirty()) { e.preventDefault(); e.returnValue = ''; } });
+  $('lessons-btn').addEventListener('click', openLessons);
+  $('lessons-close').addEventListener('click', closeLessons);
+  $('lessons-save').addEventListener('click', saveLessons);
+  $('lessons-modal').addEventListener('click', (e) => { if (e.target === $('lessons-modal')) closeLessons(); });
+  document.querySelectorAll('.lessons-tab').forEach((tab) => tab.addEventListener('click', () => showLessonsType(tab.dataset.type)));
 
   TYPES.forEach((type) => $(`version-${type}`).addEventListener('change', (e) => selectVersion(type, Number(e.target.value))));
   document.querySelectorAll('.btn-confirm-version').forEach((btn) => btn.addEventListener('click', () => confirmVersion(btn.dataset.type)));
@@ -324,6 +336,7 @@ function setActiveHistoryItem(itemEl) {
 
 /** 지난 작업 열기 — 저장된 콘텐츠(타입별 최신 버전)를 카드에 표시 */
 async function openJob(jobId, itemEl) {
+  if (!confirmLeaveEdits()) return;
   setActiveHistoryItem(itemEl);
   showWorkspace();
   $progress.setAttribute('hidden', '');
@@ -458,6 +471,7 @@ function finishProgress() {
 
 // ─── 생성 ─────────────────────────────────────────────────
 async function handleGenerate() {
+  if (!confirmLeaveEdits()) return;
   const lectures = readSlots();
   if (composerMode === 'single') {
     if (lectures.length === 0 || !lectures[0].url) {
@@ -604,11 +618,13 @@ async function refreshJobMeta() {
 
 // ─── 카드 상태 ───────────────────────────────────────────
 function setCardLoading(type, text = '생성 중…') {
+  endEdit(type);
   const body = $(`body-${type}`);
   body.innerHTML = `<div class="loading"><div class="spinner"></div><p>${escapeHtml(text)}</p></div>`;
   const card = $(`card-${type}`);
   card.classList.remove('is-done', 'is-error');
   card.querySelector('.btn-copy').disabled = true;
+  card.querySelector('.btn-edit').disabled = true;
   const reviseBtn = card.querySelector('.btn-revise');
   if (reviseBtn) reviseBtn.disabled = true;
   const revRow = $(`revision-${type}`);
@@ -616,6 +632,7 @@ function setCardLoading(type, text = '생성 중…') {
 }
 
 function setCardContent(type, content) {
+  endEdit(type);
   sectionContent[type] = content;
   const body = $(`body-${type}`);
   const pre = document.createElement('pre');
@@ -628,6 +645,7 @@ function setCardContent(type, content) {
   card.classList.remove('is-error');
   card.classList.add('is-done');
   card.querySelector('.btn-copy').disabled = false;
+  card.querySelector('.btn-edit').disabled = !currentJobId;
 
   if (type === 'cafe' || type === 'caption') {
     const chars = content.replace(/\s/g, '').length;
@@ -644,6 +662,7 @@ function setCardContent(type, content) {
 }
 
 function setCardEmpty(type) {
+  endEdit(type);
   sectionContent[type] = null;
   $(`body-${type}`).innerHTML = '<p class="empty-msg">이 작업에서는 아직 만들지 않은 섹션이에요.</p>';
   viewing[type] = null;
@@ -652,6 +671,7 @@ function setCardEmpty(type) {
   const card = $(`card-${type}`);
   card.classList.remove('is-done', 'is-error');
   card.querySelector('.btn-copy').disabled = true;
+  card.querySelector('.btn-edit').disabled = true;
   const reviseBtn = card.querySelector('.btn-revise');
   if (reviseBtn) reviseBtn.disabled = true;
   const revRow = $(`revision-${type}`);
@@ -660,7 +680,9 @@ function setCardEmpty(type) {
 }
 
 function setCardError(type, message) {
+  endEdit(type);
   sectionContent[type] = null;
+  $(`card-${type}`).querySelector('.btn-edit').disabled = true;
   $(`body-${type}`).innerHTML = `<p class="error-msg">⚠️ ${escapeHtml(message)}</p>`;
   const card = $(`card-${type}`);
   card.classList.remove('is-done');
@@ -675,6 +697,8 @@ async function handleRevise(type, instructionOverride, doneMessage) {
   if (!currentJobId) { showToast('생성이 끝난 뒤에 수정할 수 있어요'); return; }
   const instruction = (instructionOverride || $(`revise-${type}`).value).trim();
   if (!instruction) { $(`revise-${type}`).focus(); return; }
+  const editingNow = [type, EDIT_PARTNER[type]].filter((t) => t && editing[t]);
+  if (editingNow.length) { showToast(`${CARD_NAMES[editingNow[0]]}를 고치는 중이에요. 먼저 저장하거나 취소해 주세요`); return; }
 
   const reviseBtn = document.querySelector(`.btn-revise[data-type="${type}"]`);
   reviseBtn.disabled = true;
@@ -825,6 +849,10 @@ function renderVersionSelect(type) {
 function selectVersion(type, version) {
   const row = versions[type].find((v) => v.version === version);
   if (!row) return;
+  if (isDirty(type) && !confirm(`${CARD_NAMES[type]}에 저장하지 않은 수정이 있어요. 버리고 다른 버전을 볼까요?`)) {
+    renderVersionSelect(type);
+    return;
+  }
   viewing[type] = version;
   setCardContent(type, row.content);
   renderVersionSelect(type);
@@ -990,6 +1018,7 @@ async function handleSaveToNotion() {
 // ─── 전체 기획 다시하기 (컨셉 기준 4종 재생성) ──────────────
 async function handleRegenAll() {
   if (!currentJobId) { showToast('생성이 끝난 뒤에 다시 기획할 수 있어요'); return; }
+  if (!confirmLeaveEdits()) return;
   const concept = $conceptRedo.value.trim();
   if (!concept) { $conceptRedo.focus(); return; }
   if (!confirm('카페·캡션·캐러셀·캡쳐 4종을 이 컨셉으로 처음부터 다시 기획해요.\n이전 버전은 이력에 남아요. 진행할까요?')) return;
@@ -1027,6 +1056,7 @@ async function handleRegenAll() {
 // ─── 캐러셀·캡쳐 재생성 ──────────────────────────────────
 async function handleRegenSecondary() {
   if (!currentJobId) return;
+  if (!confirmLeaveEdits()) return;
   $regenBtn.disabled = true;
   $regenBtn.textContent = '재생성 중…';
   setCardLoading('carousel');
@@ -1135,4 +1165,197 @@ function showToast(message) {
   document.body.appendChild(el);
   const duration = message.length > 40 ? Math.min(9000, 3500 + message.length * 30) : 2200;
   setTimeout(() => el.remove(), duration);
+}
+
+// ─── 직접 수정 — 카드에서 바로 고쳐 저장 ──────────────────────
+// 고친 글은 새 버전으로 저장된다(모델이 다시 다듬지 않는다). 캐러셀을 고치면 캡션이 그 내용에 맞게 다시 써지고,
+// 카페 글을 고치면 📷 캡쳐 자리와 캡쳐 가이드가 본문에 맞춰진다. 고친 방향은 서버가 배워 다음 기획에 싣는다.
+const editing = { cafe: false, caption: false, carousel: false, capture: false };
+const EDIT_PARTNER = { carousel: 'caption', cafe: 'capture' }; // 고치면 따라 바뀌는 짝
+
+function isDirty(type) {
+  const ta = $(`edit-area-${type}`);
+  return !!(editing[type] && ta && ta.value !== sectionContent[type]);
+}
+function anyDirty() {
+  return TYPES.some(isDirty);
+}
+function confirmLeaveEdits() {
+  return !anyDirty() || confirm('저장하지 않은 수정이 있어요. 버리고 넘어갈까요?');
+}
+
+function startEdit(type) {
+  if (!currentJobId || !sectionContent[type] || editing[type]) return;
+  editing[type] = true;
+  const body = $(`body-${type}`);
+  const ta = document.createElement('textarea');
+  ta.className = 'edit-area';
+  ta.id = `edit-area-${type}`;
+  ta.spellcheck = false;
+  ta.value = sectionContent[type];
+  ta.setAttribute('aria-label', `${CARD_NAMES[type]} 직접 수정`);
+  ta.addEventListener('input', () => updateCount(type, ta.value));
+  ta.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveEdit(type); }
+  });
+  body.innerHTML = '';
+  body.appendChild(ta);
+  body.classList.add('is-editing');
+  const card = $(`card-${type}`);
+  card.classList.add('is-editing');
+  card.querySelector('.btn-edit').disabled = true;
+  $(`edit-bar-${type}`).removeAttribute('hidden');
+  const revRow = $(`revision-${type}`);
+  if (revRow) revRow.setAttribute('hidden', '');
+  $(`version-${type}`).disabled = true;
+  document.querySelector(`.btn-confirm-version[data-type="${type}"]`).setAttribute('hidden', '');
+  ta.focus();
+  ta.setSelectionRange(0, 0);
+  ta.scrollTop = 0;
+}
+
+/** 편집 화면만 걷는다(내용을 다시 그리는 건 부르는 쪽 몫) */
+function endEdit(type) {
+  if (!editing[type]) return;
+  editing[type] = false;
+  $(`body-${type}`).classList.remove('is-editing');
+  $(`card-${type}`).classList.remove('is-editing');
+  $(`edit-bar-${type}`).setAttribute('hidden', '');
+  $(`version-${type}`).disabled = false;
+}
+
+function cancelEdit(type) {
+  if (!editing[type]) return;
+  if (isDirty(type) && !confirm('고친 내용을 버릴까요?')) return;
+  setCardContent(type, sectionContent[type]); // 편집을 걷고 원래 글을 다시 그린다
+  renderVersionSelect(type);
+}
+
+function updateCount(type, text) {
+  if (type !== 'cafe' && type !== 'caption') return;
+  $(`count-${type}`).textContent = `${text.replace(/\s/g, '').length.toLocaleString()}자`;
+}
+
+async function saveEdit(type) {
+  const ta = $(`edit-area-${type}`);
+  if (!editing[type] || !ta || !currentJobId) return;
+  const text = ta.value;
+  if (!text.trim()) { showToast('내용이 비어 있어요. 글을 지우려던 게 아니라면 취소해 주세요'); return; }
+  const baseVersion = viewing[type] != null ? viewing[type] : undefined;
+  if (!isDirty(type) && baseVersion === latestVersionOf(type)) {
+    cancelEdit(type);
+    showToast('바뀐 내용이 없어요');
+    return;
+  }
+  const partner = EDIT_PARTNER[type];
+  const alignCaption = type === 'carousel' ? $('edit-align-caption').checked : undefined;
+  const touchesPartner = !!partner && (type !== 'carousel' || alignCaption);
+  if (touchesPartner && editing[partner]) {
+    showToast(`${CARD_NAMES[partner]}도 고치는 중이에요. 그쪽을 먼저 저장하거나 취소해 주세요`);
+    return;
+  }
+
+  const card = $(`card-${type}`);
+  const saveBtn = card.querySelector('.btn-save-edit');
+  const cancelBtn = card.querySelector('.btn-cancel-edit');
+  saveBtn.disabled = true; cancelBtn.disabled = true; saveBtn.textContent = '저장 중…';
+  ta.readOnly = true;
+  const partnerPrev = touchesPartner ? sectionContent[partner] : null;
+  if (partnerPrev) setCardLoading(partner, type === 'carousel' ? '고친 캐러셀에 맞춰 캡션을 다시 쓰는 중…' : '고친 본문에 맞춰 캡쳐 자리 확인 중…');
+
+  try {
+    const data = await apiFetch('POST', '/api/content/save', { jobId: currentJobId, type, content: text, baseVersion, alignCaption });
+    setCardContent(type, data.content);
+    const notes = [`${CARD_NAMES[type]} 저장 완료 (v${data.version})`];
+    if (type === 'carousel') {
+      if (data.caption) { setCardContent('caption', data.caption); notes.push('인스타 캡션도 고친 내용에 맞춰 다시 썼어요'); }
+      else {
+        if (partnerPrev) setCardContent('caption', partnerPrev);
+        if (data.captionError) notes.push(`캡션 맞추기는 실패했어요: ${data.captionError}`);
+      }
+    } else if (type === 'cafe') {
+      if (data.capture) setCardContent('capture', data.capture);
+      else if (partnerPrev) setCardContent('capture', partnerPrev);
+      if (data.markersMoved) notes.push(`📷 캡쳐 자리 ${data.markersMoved}곳을 본문에 맞게 고쳤어요`);
+      if (data.capture) notes.push('캡쳐 가이드도 새로 맞췄어요');
+      if (data.captureError) notes.push(`캡쳐 자리 맞추기는 실패했어요: ${data.captureError}`);
+    }
+    if (data.learning) notes.push('고친 방향은 다음 기획에 반영돼요');
+    showToast(notes.join(' · '));
+  } catch (err) {
+    ta.readOnly = false;
+    if (partnerPrev) setCardContent(partner, partnerPrev);
+    showToast(`⚠️ 저장 실패 — 고친 내용은 그대로 있어요: ${err.message}`);
+  } finally {
+    saveBtn.disabled = false; cancelBtn.disabled = false; saveBtn.textContent = '저장';
+    refreshVersions();
+  }
+}
+
+// ─── 수정에서 배운 것 ───────────────────────────────────────
+let lessonsData = null; // { cafe: { notes, examples, edits }, caption, carousel }
+let lessonsType = 'carousel';
+
+async function openLessons() {
+  const modal = $('lessons-modal');
+  modal.removeAttribute('hidden');
+  $('lessons-notes').value = '';
+  $('lessons-meta').textContent = '불러오는 중…';
+  try {
+    lessonsData = await apiFetch('GET', '/api/lessons');
+    showLessonsType(lessonsType, true);
+  } catch (err) {
+    $('lessons-meta').textContent = `불러오지 못했어요: ${err.message}`;
+  }
+}
+
+function lessonsDirty() {
+  return !!lessonsData && $('lessons-notes').value.trim() !== (lessonsData[lessonsType]?.notes || '').trim();
+}
+
+function closeLessons() {
+  if (lessonsDirty() && !confirm('고친 노트를 저장하지 않고 닫을까요?')) return;
+  $('lessons-modal').setAttribute('hidden', '');
+}
+
+function showLessonsType(type, force) {
+  if (!lessonsData) return;
+  if (!force && type !== lessonsType && lessonsDirty() && !confirm('고친 노트를 저장하지 않고 넘어갈까요?')) return;
+  lessonsType = type;
+  document.querySelectorAll('.lessons-tab').forEach((tab) => tab.classList.toggle('is-on', tab.dataset.type === type));
+  const item = lessonsData[type] || { notes: '', examples: [], edits: 0 };
+  $('lessons-notes').value = item.notes || '';
+  $('lessons-meta').textContent = item.edits ? `지금까지 ${item.edits}번의 수정에서 배웠어요` : '아직 고쳐 저장한 적이 없어요';
+  const box = $('lessons-examples');
+  box.innerHTML = '';
+  if (item.examples && item.examples.length) {
+    const title = document.createElement('div');
+    title.className = 'lessons-examples-title';
+    title.textContent = '최근에 고친 문장 (전 → 후) — 다음 기획에 본보기로 함께 실려요';
+    box.appendChild(title);
+    item.examples.slice(0, 6).forEach((ex) => {
+      const el = document.createElement('div');
+      el.className = 'lessons-example';
+      const was = document.createElement('span');
+      was.className = 'was';
+      was.textContent = ex.before;
+      el.append(was, document.createTextNode(`\n→ ${ex.after}`));
+      box.appendChild(el);
+    });
+  }
+}
+
+async function saveLessons() {
+  if (!lessonsData) return;
+  const btn = $('lessons-save');
+  btn.disabled = true; btn.textContent = '저장 중…';
+  try {
+    lessonsData[lessonsType] = await apiFetch('POST', '/api/lessons', { type: lessonsType, notes: $('lessons-notes').value });
+    showLessonsType(lessonsType, true);
+    showToast('배운 것을 저장했어요 — 다음 기획부터 이대로 반영돼요');
+  } catch (err) {
+    showToast(`⚠️ ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = '저장';
+  }
 }

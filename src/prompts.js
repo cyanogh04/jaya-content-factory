@@ -38,6 +38,99 @@ ${c}
 `;
 }
 
+/**
+ * 수정에서 배운 것 — 자야쌤이 화면에서 손으로 고친 것에서 모은 노트와 예문(lessons.js). 카페·캡션·캐러셀의 첫 생성·수정·재생성에 싣는다.
+ * 2026-11-17: 기획안을 그대로 못 쓰고 매번 고쳐 쓰는데 고친 내용이 남지 않아 같은 수정을 되풀이했다.
+ * 배운 것이 없으면 빈 문자열 — 프롬프트가 한 글자도 달라지지 않는다.
+ * @param {{ notes?: string, examples?: Array<{ where?: string, before: string, after: string }> }} [lessons]
+ */
+export function editLessonsBlock(lessons) {
+  const notes = (lessons?.notes || '').trim();
+  const examples = (lessons?.examples || []).slice(0, 6);
+  if ((!notes || notes === '없음') && examples.length === 0) return '';
+  const one = (s) => String(s).replace(/\s*\n\s*/g, ' / ');
+  const exampleLines = examples.length
+    ? `
+▸ 최근에 자야쌤이 고친 문장 (전 → 후)
+${examples.map((e) => `  · 전: ${one(e.before)}\n    후: ${one(e.after)}`).join('\n')}`
+    : '';
+  return `
+[자야쌤이 직접 고친 것에서 배운 것 — 지난 기획안들을 자야쌤이 손으로 고친 방향이다. 이번에는 처음부터 이렇게 쓴다]
+${notes && notes !== '없음' ? notes : '(아직 정리된 노트는 없다 — 아래 예문의 방향을 따른다)'}${exampleLines}
+- 위 내용은 자야쌤이 실제로 고친 것이라 말투·표현·구성에서는 위의 다른 문체 규칙보다 앞선다.
+  단, 자막에 없는 사실을 만들지 않고, 출력 형식·컷 수·표기 규약(후크 후보·solution 목록·📷 자리표시)은 그대로 지킨다.
+- 예문은 다른 강의의 문장이다. 낱말을 그대로 베끼지 말고 고친 방향만 따른다.
+`;
+}
+
+/**
+ * 수정에서 배우기 — 자야쌤이 방금 손으로 고친 곳(전 → 후)을 보고 '배운 것' 노트를 고쳐 쓴다.
+ * 한 번의 수정으로 넓게 단정하면 다음 기획이 틀어지므로, 고친 범위만큼만 적고 같은 방향이 되풀이될 때 횟수를 올린다.
+ * @param {{ type: 'cafe'|'caption'|'carousel', notes?: string, pairs: Array<{ where?: string, before: string, after: string }> }} o
+ */
+export function buildEditLessonsPrompt({ type, notes, pairs }) {
+  const label = TYPE_LABELS[type];
+  const current = (notes || '').trim();
+  const list = pairs
+    .map((p, i) => `${i + 1}. ${p.where ? `[${p.where}] ` : ''}전: ${p.before}\n   후: ${p.after}`)
+    .join('\n');
+  return `[작업] 자야쌤이 방금 ${label} 초안을 손으로 고쳐 저장했다. 아래 [고친 곳]을 보고, **다음 기획부터는 처음에 그렇게 쓰도록** [지금까지 배운 것]을 고쳐 쓴다.
+이 노트는 앞으로 모든 강의의 ${label}를 쓸 때 읽힌다. 그래서 다음 강의에도 통하는 것만 적는다.
+
+[적는 것]
+- 말투·어휘·문장 길이, 무엇을 앞세우고 무엇을 빼는지, 구성·분량, 자주 지우는 것과 자주 보태는 것.
+- 줄마다 "- (어떻게 쓴다) — 예: (전) → (후) (n회)". 예는 실제로 고친 문장에서 짧게 따온다. n은 그 방향으로 고쳐 **저장한 횟수**다 — 이번 저장에서 여러 군데를 같은 방향으로 고쳤어도 1회로 세고, 새 줄은 (1회)로 시작한다.
+
+[적지 않는 것]
+- 이번 강의에만 해당하는 수정 — 수치·이름·시각·오탈자, 강의 내용을 바로잡은 것.
+- 내용을 통째로 다른 이야기로 바꾼 것(어떤 장면·소재 대신 다른 장면·소재를 넣음). 그건 이 강의에서 무엇을 다룰지 고른 것이지
+  글쓰기 취향이 아니다. 바꾸면서 길이나 문장 수가 달라졌어도 분량 규칙으로 만들지 않는다. **같은 내용을 다르게 쓴 수정**에서만 배운다.
+- 왜 고쳤는지에 대한 짐작. 고친 사실에서 보이는 방향만 적는다.
+- 한 번 고친 것을 넓게 부풀린 규칙. 고친 범위만큼만 적는다
+  (본문 한 줄의 끝을 "~합니다"에서 "~해요"로 고쳤다면 "본문 끝을 '~해요'로 쓴다 (1회)"이지 "모든 문장을 구어체로"가 아니다).
+
+[고쳐 쓰는 법]
+- 이미 있는 줄과 같은 방향이면 새 줄을 보태지 말고 그 줄의 횟수를 올린다(필요하면 표현을 다듬는다).
+- 이미 있는 줄과 반대로 고쳤으면 새 수정을 따른다 — 옛 줄을 고치거나 지운다.
+- 12줄을 넘기지 않는다. 넘으면 횟수가 적은 줄부터 합치거나 뺀다.
+- 배울 것이 없으면 [지금까지 배운 것]을 글자 그대로 출력한다. 그것도 비어 있으면 "없음"만 출력한다.
+
+[출력] 고쳐 쓴 목록만 출력한다(머리말·설명 없이).
+
+[지금까지 배운 것]
+${current && current !== '없음' ? current : '(아직 없음)'}
+
+[고친 곳 — ${label}]
+${list}`;
+}
+
+/**
+ * 카페 글을 손으로 고친 뒤 — 글 속 "📷 캡쳐 n [MM:SS] …" 줄이 고친 본문과 아직 맞는지 보고, 안 맞는 줄만 고치게 한다.
+ * 본문은 자야쌤이 고친 그대로 두어야 하므로 모델은 📷 줄의 바꿈 목록(JSON)만 내고, 끼우는 일은 코드가 한다(generate.js).
+ * @param {{ cafe: string, pairs: Array<{ before: string, after: string }>, course?: object }} o
+ */
+export function buildCafeCaptureSyncPrompt({ cafe, pairs, course }) {
+  const stamp = course ? '[n강 MM:SS]' : '[MM:SS]';
+  const list = pairs.map((p, i) => `${i + 1}. 전: ${p.before}\n   후: ${p.after}`).join('\n');
+  return `[작업] 자야쌤이 아래 [카페 글]을 손으로 고쳤다. 글 속 "📷 캡쳐 n ${stamp} 설명" 줄은 그 자리에 넣을 강의 화면이다.
+고친 뒤에도 📷 줄 하나하나가 바로 앞뒤 본문이 말하는 내용과 맞는지 본다. 맞지 않게 된 줄만, 위 [강의 자막]에서 그 본문에 맞는 장면을 찾아 시각과 설명을 고친다.
+
+- 본문은 한 글자도 고치지 않는다. 📷 줄만 다룬다. 번호(캡쳐 n)와 줄의 형식은 그대로 둔다.
+- 앞뒤 본문이 그대로인 📷 줄은 건드리지 않는다. 고칠 줄이 없는 것이 보통이다.
+- 시각은 자막에 실제로 찍힌 것만 쓴다(${stamp}).
+- 그 장면 이야기가 본문에서 아예 사라졌으면 after를 빈 문자열로 둔다(그 📷 줄을 지운다).
+- 새 📷 줄을 보태지 않는다.
+
+[출력] JSON 배열만 출력한다(설명·코드펜스 없이). before에는 📷 줄을 글자 그대로 옮긴다. 고칠 줄이 없으면 [].
+[{"before": "📷 캡쳐 2 [12:30] 원문 그대로", "after": "📷 캡쳐 2 [14:05] 고친 줄"}]
+
+[자야쌤이 고친 곳]
+${list || '(본문 바깥만 고침)'}
+
+[카페 글 — 고친 뒤]
+${cafe}`;
+}
+
 /** 보이스 프로파일 JSON → 프롬프트용 요약 문자열 (대표 캡션은 EXAMPLES로 분리) */
 function voiceSummary(voice) {
   const { representative_captions, ...rest } = voice || {};
@@ -328,7 +421,7 @@ ${joined}`;
 // ─────────────────────────────────────────────
 // 2. 네이버 카페 서머리 (voice 적용)
 // ─────────────────────────────────────────────
-export function buildCafePrompt({ voice, topic, concept, course, lectureMap }) {
+export function buildCafePrompt({ voice, topic, concept, course, lectureMap, lessons }) {
   return `${voiceBlock(voice)}
 (위 예시는 자야쌤의 인스타 캡션이다. 어휘·리듬·습관만 가져오고, 인스타식 이모지 밀도와 1인칭 화자는 아래 [카페 글의 화자와 결]로 바꾼다.)
 
@@ -349,7 +442,7 @@ ${DISCLOSURE_RULE}
 ${SEARCH_RULE}
 
 ${NATURAL_KOREAN}
-
+${editLessonsBlock(lessons)}
 [작업] 위 [강의 자막]을 바탕으로 디바가 네이버 카페에 바로 올릴 강의 서머리를 쓴다.
 구성(소제목을 달지 말고 카페 글답게 흐르게):
 1) 제목 줄 (검색어 포함, 위 제목 규칙)
@@ -669,7 +762,7 @@ ${c}
 `;
 }
 
-export function buildCarouselPrompt({ voice, topic, concept, lectureMap, caption, course }) {
+export function buildCarouselPrompt({ voice, topic, concept, lectureMap, caption, course, lessons }) {
   return `[카드의 말투 — 수업을 소개하는 사람의 말]
 이 기획안의 헤드카피·서브카피·본문은 후속 '캐러셀 공장'에서 **한 글자도 다듬지 않고 그대로** 카드에 찍힌다. 그래서 이 기획이 곧 카드다.
 카드는 자야쌤이 수업 시간에 하는 말이 아니다. 자야쌤 수업을 잘 아는 사람이, 수업을 처음 보는 사람에게 소개하는 말이다.
@@ -758,7 +851,7 @@ CUT 1에 강의 화면·강사 모습·수업 장면은 노출하지 않는다(�
 ${PLAIN_WORDS}
 
 ${CARD_KOREAN}
-
+${editLessonsBlock(lessons)}
 [금지 — 디자인 지시] 레이아웃(텍스트 위치·정렬·크기), 컬러(색상 코드·배경색), 타이포(폰트·pt),
 오버레이/띠/박스/아이콘/로고/페이지네이션 같은 그래픽 처리 지시는 절대 쓰지 않는다.
 디자인은 후속 공정이 전담한다 — 여기서는 "무엇이 보이는 장면인가"만 말한다.
@@ -910,7 +1003,11 @@ ${topicLine(topic)}`;
  * 교정자 한 번을 따로 둔다. 낱말만 바꿔 끼우는 땜빵이 아니라 자야쌤이 소리 내어 말하듯 문장을 다시 쓴다.
  * @param {{ plan: string, lectureMap?: string, instruction?: string, onlyCuts?: number[] }} o
  */
-export function buildCardCopyReviewPrompt({ plan, lectureMap, instruction, onlyCuts }) {
+export function buildCardCopyReviewPrompt({ plan, lectureMap, instruction, onlyCuts, lessons }) {
+  const learned = editLessonsBlock(lessons);
+  const learnedPart = learned
+    ? `${learned}(교정할 때도 위 방향을 따른다. 위 방향대로 쓰인 줄은 건드리지 않는다.)\n`
+    : '';
   const map = (lectureMap || '').trim();
   const scope = onlyCuts && onlyCuts.length ? `
 이번에는 CUT ${onlyCuts.join(', ')}의 카드 텍스트만 본다(나머지 컷은 이미 확정됐다).` : '';
@@ -951,7 +1048,7 @@ export function buildCardCopyReviewPrompt({ plan, lectureMap, instruction, onlyC
 '짓다'를 동사로 쓰지 않는다("옷을 짓는/지어요" 금지 — 옷은 "만든다"). 원래 문장에 없던 뜻을 보태지 않는다.
 고친 헤드카피는 30자, 서브카피는 35자 안쪽이고 문장부호(. ! ? ~ …)로 끝맺는다.
 기획안·강의 지도에 없는 사실을 넣지 않는다. solution 컷의 하이픈 목록 줄은 고치지 않는다.${userAsk}
-
+${learnedPart}
 [출력] JSON 배열만 출력한다(설명·코드펜스 없이). 줄마다 원문을 글자 그대로 before에 옮긴다. 고칠 것이 없으면 [].
 [{"cut": 1, "field": "서브카피", "before": "원문 그대로", "after": "고친 문장"}]
 ${map ? `
@@ -976,7 +1073,7 @@ ${plan}`;
 // 캡션도 캐러셀처럼 수업 내용을 옮기고 만드는 과정을 따라가던 것(자야쌤 지적)을 고친다. 화자는 그대로 자야쌤 1인칭이다.
 const CAPTION_FLOW = `첫 두 줄 후크에서 시작해 한 편으로 이어지는 수업 소개(어떤 옷을 만드는 수업인지 → 왜 이렇게 만드는지 → 그래서 수업에서 무엇까지 배우는지 → 또 어떤 이유로 무엇까지 → … → 손에 남는 옷 → 같이 하자 → CTA)`;
 
-export function buildCaptionPrompt({ voice, topic, concept, lectureMap, course }) {
+export function buildCaptionPrompt({ voice, topic, concept, lectureMap, course, lessons }) {
   return `${voiceBlock(voice)}
 
 ${lectureMapBlock(lectureMap, { why: true })}
@@ -1051,7 +1148,7 @@ ${NATURAL_KOREAN}
 
 ${PLAIN_WORDS}
 (자야쌤의 입말 습관 — 너무너무·~쟎아요·~거든요·말줄임표 — 은 그대로 살린다. 쉬운 말이란 자야쌤이 평소에 쓰는 말이지 밋밋한 말이 아니다.)
-(캡션에서는 줄바꿈을 문장이 끝나는 자리에서만 한다. 한 줄을 짧게 만들려고 문장 가운데를 자르거나, 서술어 없는 명사구에
+${editLessonsBlock(lessons)}(캡션에서는 줄바꿈을 문장이 끝나는 자리에서만 한다. 한 줄을 짧게 만들려고 문장 가운데를 자르거나, 서술어 없는 명사구에
  "~으로요/~이에요"만 붙인 조각을 늘어놓지 않는다 — 자야쌤 원문처럼 짧아도 온전한 문장이다.)
 
 [출력 전 점검 — 하나라도 어긋나면 고친 뒤 출력한다]
@@ -1080,9 +1177,9 @@ ${topicLine(topic)}`;
 // ─────────────────────────────────────────────
 // 수정(revise) — 카페 서머리 / 인스타 캡션 / 캐러셀 기획
 // ─────────────────────────────────────────────
-export function buildRevisePrompt({ type, original, instruction, voice, topic, concept, cafe, caption, carousel, lectureMap, course }) {
+export function buildRevisePrompt({ type, original, instruction, voice, topic, concept, cafe, caption, carousel, lectureMap, course, lessons }) {
   if (type === 'carousel') {
-    return buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption, lectureMap, course });
+    return buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption, lectureMap, course, lessons });
   }
   const label = TYPE_LABELS[type];
   // 캡션 수정에 짝꿍 캐러셀 기획안이 딸려 오면(후크 안 교체 뒤 캡션 맞추기) — 같은 게시물의 카드와 결을 맞춘다
@@ -1143,7 +1240,7 @@ ${conceptBlock(concept)}
 ${BRAND_GOAL}
 ${pairBlock}
 ${ruleBlocks}
-
+${editLessonsBlock(lessons)}
 [작업] 아래는 위 [강의 자막]을 바탕으로 이미 작성한 ${label} 초안이다.
 [수정 지시]에 따라 해당 부분만 고치고, 나머지 톤과 내용은 유지해 전체를 다시 쓴다.
 자막에 없는 사실은 추가하지 않는다. ${rules}
@@ -1159,7 +1256,7 @@ ${instruction}`;
 // 캐러셀 기획 수정 — 규칙·출력 형식은 원본 프롬프트를 그대로 싣고, 그 위에 '기존 기획안을 어떻게 고칠지'만 덧붙인다.
 // 가장 흔한 지시는 후크 안 교체("B안으로")다. 이때 1컷만 바꾸면 열린 고리·감정 곡선이 어긋나므로
 // 연결된 부분까지 함께 맞추게 하고, 반대로 바꿀 이유 없는 컷은 건드리지 않게 한다.
-function buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption, lectureMap, course }) {
+function buildCarouselRevisePrompt({ original, instruction, voice, topic, concept, cafe, caption, lectureMap, course, lessons }) {
   const context =
     cafe && caption
       ? `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캐러셀은 이 내용과 메시지·표현이 일관되어야 한다.
@@ -1172,7 +1269,7 @@ ${caption}
 `
       : '';
 
-  return `${context}${buildCarouselPrompt({ voice, topic, concept, lectureMap, course })}
+  return `${context}${buildCarouselPrompt({ voice, topic, concept, lectureMap, course, lessons })}
 
 [수정 작업 — 위 규칙과 출력 형식을 그대로 지키면서, 아래 [기존 기획안]을 [수정 지시]대로 고쳐 기획안 전체를 다시 출력한다]
 ▸ 후크 안을 바꾸라는 지시(예: "B안으로 다시 기획")일 때
@@ -1210,7 +1307,7 @@ ${instruction}`;
 // ─────────────────────────────────────────────
 // 재생성(regenerate) — 확정된 카페·캡션 기반으로 캐러셀·캡쳐 재생성
 // ─────────────────────────────────────────────
-export function buildRegeneratePrompt({ type, cafe, caption, topic, concept, voice, lectureMap, course }) {
+export function buildRegeneratePrompt({ type, cafe, caption, topic, concept, voice, lectureMap, course, lessons }) {
   const context = `[확정된 카페 서머리]
 ${cafe}
 
@@ -1221,7 +1318,7 @@ ${caption}`;
     return `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캐러셀은 이 내용과 메시지·표현이 일관되어야 한다.
 ${context}
 
-${buildCarouselPrompt({ voice, topic, concept, lectureMap, course })}`;
+${buildCarouselPrompt({ voice, topic, concept, lectureMap, course, lessons })}`;
   }
   if (type === 'capture') {
     return `[컨텍스트] 아래는 이 강의에 대해 확정된 콘텐츠다. 캡쳐 시점은 이 내용에서 강조된 장면을 우선 반영한다.

@@ -4,6 +4,10 @@
 // POST /api/regenerate-all (SSE) — { jobId, concept } → 컨셉 기준으로 4종 전체 재기획
 // POST /api/revise      — { jobId, type, instruction } → { content, version, capture? }  (cafe 수정으로 📷 자리가 바뀌면 capture도 갱신해 돌려줌)
 // POST /api/regenerate  — { jobId } → { carousel, capture }
+// POST /api/content/save — { jobId, type, content, baseVersion?, alignCaption? } → 화면에서 손으로 고친 글을 새 버전으로 저장.
+//                          캐러셀을 고치면 캡션을, 카페 글을 고치면 📷 캡쳐 자리와 캡쳐 가이드를 따라 맞추고, 고친 방향을 배운다
+// GET  /api/lessons      — → { cafe, caption, carousel } 각 { notes, examples, edits } (수정에서 배운 것)
+// POST /api/lessons      — { type, notes } → 배운 것 노트를 직접 고쳐 저장
 // POST /api/learn-voice — {} → { message }
 // GET  /api/jobs        — → { jobs } (지난 작업 목록, 최신순)
 // GET  /api/job/:id     — → { job, contents }
@@ -14,7 +18,8 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateAll, generateCourse, regenerateAll, revise, regenerateSecondary, loadCourse } from './generate.js';
+import { generateAll, generateCourse, regenerateAll, revise, regenerateSecondary, loadCourse, saveManualEdit } from './generate.js';
+import { loadAllLessons, saveLessonNotes, LESSON_TYPES } from './lessons.js';
 import { learn as learnVoice } from './voice.js';
 import { exchangeToLongLived, autoRefreshIfNeeded } from './instagram.js';
 import { saveLectureToNotion } from './notion.js';
@@ -316,6 +321,55 @@ app.get('/api/jobs', async (req, res) => {
   try {
     const jobs = await listJobs();
     res.json({ jobs });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ───────────────────────── POST /api/content/save ─────────────────────────
+// 화면에서 손으로 고친 글을 새 버전으로 저장한다. 고친 글은 모델이 다시 다듬지 않는다(자야쌤이 쓴 그대로).
+// 짝은 따라온다 — 캐러셀을 고치면 캡션이 그 내용에 맞게 다시 써지고, 카페 글을 고치면 📷 자리와 캡쳐 가이드가 본문에 맞춰진다.
+// 고친 방향은 뒤에서 '배운 것' 노트에 반영돼 다음 기획부터 실린다.
+
+app.post('/api/content/save', async (req, res) => {
+  const { jobId, type, content, baseVersion, alignCaption } = req.body || {};
+  if (!jobId || !type || typeof content !== 'string') {
+    return res.status(400).json({ error: '직접 수정 저장: jobId, type, content가 모두 필요합니다.' });
+  }
+  try {
+    const result = await saveManualEdit({
+      jobId,
+      type,
+      content,
+      baseVersion: Number.isInteger(baseVersion) ? baseVersion : undefined,
+      alignCaption: alignCaption !== false,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ───────────────────────── /api/lessons — 수정에서 배운 것 ─────────────────────────
+
+app.get('/api/lessons', async (req, res) => {
+  try {
+    res.json(await loadAllLessons());
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/lessons', async (req, res) => {
+  const { type, notes } = req.body || {};
+  if (!LESSON_TYPES.includes(type) || typeof notes !== 'string') {
+    return res.status(400).json({ error: '배운 것 저장: type(cafe·caption·carousel)과 notes가 필요합니다.' });
+  }
+  try {
+    res.json(await saveLessonNotes(type, notes));
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: err.message });
