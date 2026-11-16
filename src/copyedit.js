@@ -103,7 +103,6 @@ export async function reviewCardCopy({ content, lectureMap, previous, instructio
       model: MODELS.CAROUSEL,
       system: COMMON_HEADER,
       prompt: buildCardCopyReviewPrompt({ plan: content, lectureMap, instruction, onlyCuts }),
-      maxTokens: 4000,
       step: `${label} 카드 카피 교정`,
     });
     const edits = parseReview(raw).filter((e) => !onlyCuts || onlyCuts.includes(e.cut));

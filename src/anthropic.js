@@ -92,20 +92,90 @@ export async function resolveModel() {
   return getModelStatus();
 }
 
+// 출력 한도(max_tokens) — **사고(thinking) + 본문**을 합친 한도다. Opus 5.5는 사고를 끌 수 없고(effort로만 조절),
+// 사고에 쓴 토큰도 이 한도에서 빠진다. 2026-11-04에 모델을 올리면서 한도는 본문 길이에 맞춘 4000~16000 그대로 둬서,
+// 사고가 길어진 호출은 본문이 중간에 끊긴 채 저장됐다(2026-11-11·11-16 — 강의 지도·카페 글·캐러셀. 끊긴 강의 지도는
+// 그 뒤 기획에도 계속 실렸다). 한도는 "넘으면 자르는 선"일 뿐 모델에게 보이지 않고 요금은 실제로 쓴 토큰만 내므로
+// 넉넉히 한 값으로 둔다. 이만큼 길면 한 번에 받는 요청은 응답 대기 시간 제한에 걸리므로 스트리밍으로 받는다.
+export const MAX_OUTPUT_TOKENS = 64000;
+const IDLE_TIMEOUT_MS = 180_000; // 스트림에서 이만큼 아무것도 안 오면 끊긴 것으로 본다(사고 중에도 ping은 온다)
+const TOTAL_TIMEOUT_MS = 20 * 60_000;
+
 /**
- * Claude 호출.
+ * 스트리밍 응답(SSE)을 끝까지 읽어 한 메시지로 모은다 — 본문 텍스트·끝난 이유·토큰 사용량.
+ * @param {Response} res
+ * @param {() => void} onActivity 조각이 올 때마다 부른다(무응답 타이머 초기화)
+ * @returns {Promise<{ text: string, stopReason: string|null, finished: boolean, usage: object }>}
+ */
+async function readMessageStream(res, onActivity) {
+  const texts = []; // content block index → 텍스트 (사고 블록은 모으지 않는다)
+  const out = { stopReason: null, finished: false, usage: {} };
+
+  const handle = (rawEvent) => {
+    const data = rawEvent
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (!data) return;
+    let ev;
+    try {
+      ev = JSON.parse(data);
+    } catch {
+      return; // 형식이 깨진 조각은 건너뛴다 — 본문이 빠졌으면 아래 '끝까지 받았는지' 검사에서 드러난다
+    }
+    if (ev.type === 'message_start') {
+      Object.assign(out.usage, ev.message?.usage || {});
+    } else if (ev.type === 'content_block_start') {
+      if (ev.content_block?.type === 'text') texts[ev.index] = ev.content_block.text || '';
+    } else if (ev.type === 'content_block_delta') {
+      if (ev.delta?.type === 'text_delta') texts[ev.index] = (texts[ev.index] || '') + ev.delta.text;
+    } else if (ev.type === 'message_delta') {
+      if (ev.delta?.stop_reason) out.stopReason = ev.delta.stop_reason;
+      Object.assign(out.usage, ev.usage || {});
+    } else if (ev.type === 'message_stop') {
+      out.finished = true;
+    } else if (ev.type === 'error') {
+      const err = new Error(ev.error?.message || '알 수 없는 오류');
+      err.streamErrorType = ev.error?.type || 'error';
+      throw err;
+    }
+  };
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    onActivity();
+    buf = (buf + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+    let cut;
+    while ((cut = buf.indexOf('\n\n')) !== -1) {
+      handle(buf.slice(0, cut));
+      buf = buf.slice(cut + 2);
+    }
+  }
+  if (buf.trim()) handle(buf);
+
+  const text = texts.filter((t) => typeof t === 'string').join('\n').trim();
+  return { text, ...out };
+}
+
+/**
+ * Claude 호출 — 스트리밍으로 받아 끝까지 온 글만 돌려준다. 중간에 끊긴 글(출력 한도 도달·연결 끊김)은
+ * 돌려주지 않고 오류로 던진다 — 끊긴 글이 완성본처럼 저장되면 안 된다.
  * @param {object} opts
  * @param {string} opts.model      - 모델 ID
  * @param {string} [opts.system]   - system 프롬프트 (공통 헤더)
  * @param {string} opts.prompt     - 작업 지시 프롬프트 (user 메시지의 마지막 블록)
  * @param {string} [opts.transcript] - 자막 텍스트. 있으면 캐시 블록으로 분리 삽입.
- * @param {number} [opts.maxTokens]  - 기본 8000 (한국어 출력이 길어 4000 이상 권장)
- * @param {number} [opts.timeoutMs]  - 응답 대기 한도. 미지정 시 maxTokens에 비례해 자동 산정.
- *                                     (캐러셀처럼 maxTokens 16000짜리 호출은 120초로는 모자란다)
+ * @param {number} [opts.maxTokens]  - 사고 + 본문 합계 한도. 기본 MAX_OUTPUT_TOKENS — 본문 길이에 맞춰 줄이지 않는다.
+ * @param {number} [opts.timeoutMs]  - 전체 대기 한도(기본 20분). 이와 별개로 3분 동안 아무것도 안 오면 끊는다.
  * @param {string} [opts.step]       - 에러 메시지에 붙일 단계명
  * @returns {Promise<string>} 응답 텍스트
  */
-export async function callClaude({ model, system, prompt, transcript, maxTokens = 8000, timeoutMs, step = 'Claude 생성' }) {
+export async function callClaude({ model, system, prompt, transcript, maxTokens = MAX_OUTPUT_TOKENS, timeoutMs = TOTAL_TIMEOUT_MS, step = 'Claude 생성' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(`${step}: ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.`);
@@ -125,6 +195,7 @@ export async function callClaude({ model, system, prompt, transcript, maxTokens 
   const body = {
     model,
     max_tokens: maxTokens,
+    stream: true,
     output_config: { effort: EFFORT },
     messages: [{ role: 'user', content }],
   };
@@ -132,11 +203,19 @@ export async function callClaude({ model, system, prompt, transcript, maxTokens 
     body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
   }
 
-  // 출력이 길수록 오래 걸린다. 대략 1000 토큰당 20초 + 여유 60초, 최소 120초.
-  const limitMs = timeoutMs ?? Math.max(120_000, 60_000 + (maxTokens / 1000) * 20_000);
-
+  // 시간 제한 둘: 전체 한도(timeoutMs)와 무응답 한도(조각이 올 때마다 다시 잰다)
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), limitMs);
+  let timedOut = null;
+  const abortWith = (why) => () => { timedOut = why; controller.abort(); };
+  const idleWhy = `${IDLE_TIMEOUT_MS / 1000}초 동안 무응답`;
+  const totalTimer = setTimeout(abortWith(`전체 ${Math.round(timeoutMs / 1000)}초`), timeoutMs);
+  let idleTimer = setTimeout(abortWith(idleWhy), IDLE_TIMEOUT_MS);
+  const onActivity = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(abortWith(idleWhy), IDLE_TIMEOUT_MS);
+  };
+  const stopTimers = () => { clearTimeout(totalTimer); clearTimeout(idleTimer); };
+  const timeoutError = () => new Error(`${step}: Anthropic API 응답 시간 초과 (${timedOut}). 잠시 후 다시 시도하세요.`);
 
   let res;
   try {
@@ -151,15 +230,13 @@ export async function callClaude({ model, system, prompt, transcript, maxTokens 
       signal: controller.signal,
     });
   } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === 'AbortError') {
-      throw new Error(`${step}: Anthropic API 응답 시간 초과 (${Math.round(limitMs / 1000)}초). 잠시 후 다시 시도하세요.`);
-    }
+    stopTimers();
+    if (timedOut) throw timeoutError();
     throw new Error(`${step}: Anthropic API 네트워크 오류 — ${err.message}`);
   }
-  clearTimeout(timeout);
 
   if (!res.ok) {
+    stopTimers();
     let detail = '';
     try {
       const errJson = await res.json();
@@ -179,32 +256,41 @@ export async function callClaude({ model, system, prompt, transcript, maxTokens 
     throw new Error(`${step}: Anthropic API 오류 (HTTP ${res.status})${detail}`);
   }
 
-  const data = await res.json();
+  let data;
+  try {
+    data = await readMessageStream(res, onActivity);
+  } catch (err) {
+    if (timedOut) throw timeoutError();
+    if (err.streamErrorType) {
+      throw new Error(`${step}: Anthropic API가 응답 도중 오류를 보냈습니다 (${err.streamErrorType}) — ${err.message}. 잠시 후 다시 시도하세요.`);
+    }
+    throw new Error(`${step}: 응답을 받는 도중 연결이 끊겼습니다 — ${err.message}. 잠시 후 다시 시도하세요.`);
+  } finally {
+    stopTimers();
+  }
 
-  // 캐시 동작 확인용 로그 (토큰 절감 검증)
-  const usage = data.usage || {};
+  // 캐시 동작·사고 분량 확인용 로그 — '출력'에는 사고 토큰이 들어 있다(본문 글자 수와 견주면 사고에 얼마 썼는지 보인다)
+  const usage = data.usage;
   console.log(
     `  [${step}] 토큰 — 입력 ${usage.input_tokens ?? 0}` +
     `, 캐시생성 ${usage.cache_creation_input_tokens ?? 0}` +
     `, 캐시읽기 ${usage.cache_read_input_tokens ?? 0}` +
-    `, 출력 ${usage.output_tokens ?? 0}`
+    `, 출력 ${usage.output_tokens ?? 0}(사고 포함) / 본문 ${data.text.length}자`
   );
 
-  if (data.stop_reason === 'refusal') {
+  if (data.stopReason === 'refusal') {
     throw new Error(`${step}: 모델이 요청을 거절했습니다 (stop_reason: refusal). 입력 내용을 확인하세요.`);
   }
-  if (data.stop_reason === 'max_tokens') {
-    console.warn(`  [${step}] 경고: 출력이 max_tokens(${maxTokens})에 도달해 잘렸을 수 있습니다.`);
+  if (data.stopReason === 'max_tokens') {
+    throw new Error(
+      `${step}: 글이 출력 한도(${maxTokens}토큰, 사고 포함)에 닿아 중간에 끊겼습니다 — 끊긴 글은 저장하지 않았습니다. 다시 시도해 주세요.`
+    );
   }
-
-  const text = (data.content || [])
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text)
-    .join('\n')
-    .trim();
-
-  if (!text) {
-    throw new Error(`${step}: Anthropic 응답에 텍스트가 없습니다 (stop_reason: ${data.stop_reason}).`);
+  if (!data.finished || !data.stopReason) {
+    throw new Error(`${step}: 응답이 끝까지 오지 않았습니다(중간에 끊김) — 끊긴 글은 저장하지 않았습니다. 다시 시도해 주세요.`);
   }
-  return text;
+  if (!data.text) {
+    throw new Error(`${step}: Anthropic 응답에 텍스트가 없습니다 (stop_reason: ${data.stopReason}).`);
+  }
+  return data.text;
 }

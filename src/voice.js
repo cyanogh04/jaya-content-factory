@@ -68,7 +68,6 @@ export async function learn({ captions: inputCaptions } = {}) {
   const raw = await callClaude({
     model: MODELS.VOICE,
     prompt: buildVoicePrompt(captions),
-    maxTokens: 8000,
     step: '말투 분석',
   });
 

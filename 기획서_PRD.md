@@ -209,7 +209,7 @@ CREATE TABLE voice_profile (
 
 ### 10.3 Anthropic (생성)
 - 모델: 강의 지도·4종 모두 `claude-opus-5-5`, effort high (2026-11-04 opus-4-8에서 올림; carousel·capture는 2026-09-04에 sonnet-4-6에서 올림). 환경변수 `CLAUDE_MODEL`로 바꿀 수 있다.
-- `max_tokens` 4000 이상.
+- `max_tokens`는 사고 + 본문 합계 한도 — 모든 호출이 64000(`MAX_OUTPUT_TOKENS`)을 쓰고 스트리밍으로 받는다. 끊긴 글은 저장하지 않는다(2026-11-16).
 - **프롬프트 캐싱**: 자막 블록에 `cache_control: {"type": "ephemeral"}` 적용. 4종 순차 호출 시 자막 입력 토큰 약 90% 절감.
 
 ## 11. 환경변수 (.env)

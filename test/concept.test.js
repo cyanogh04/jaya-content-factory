@@ -99,7 +99,7 @@ mock.module('../src/anthropic.js', {
     MODELS: { VOICE: 'x', CAFE: 'x', CAPTION: 'x', CAROUSEL: 'x', CAPTURE: 'x' },
     callClaude: async ({ step, prompt, transcript }) => {
       calls.push({ step, prompt, transcript });
-      if (step === '강의 파악') return `- 강의 한 줄: 가짜 강의 지도 (${step})`;
+      if (step === '강의 파악') return `- 강의 한 줄: 가짜 강의 지도 (${step})\n- 검색어 후보: 가짜 검색어`;
       return `가짜 결과 (${step})`;
     },
   },
@@ -219,6 +219,34 @@ test('강의 지도가 없는 옛 작업은 수정할 때 지도를 만들어 �
   assert.equal(calls[0].step, '강의 파악', '지도가 없는데 만들지 않았다');
   assert.ok(calls[1].prompt.includes(MAP_TEXT), '방금 만든 지도가 캡션 수정 프롬프트에 실리지 않았다');
   assert.ok((await gen.loadLectureMap(jobId))?.includes(MAP_TEXT), '만든 지도가 저장되지 않았다');
+});
+
+// 2026-11-16: 모델을 Opus 5.5로 올린 뒤 출력 한도가 사고 토큰에 먹혀 강의 지도가 중간까지만 저장됐고(마지막 항목 '검색어 후보' 없음),
+// 지도는 작업당 한 번만 만들기 때문에 그 반쪽 지도가 이후 수정·재기획에 계속 실렸다. 끊긴 지도는 다음에 쓸 때 한 번 다시 만든다.
+test('끊긴 채 저장된 강의 지도는 다음에 쓸 때 다시 만든다 — 한 작업에서 한 번만', async (t) => {
+  const { jobId } = await gen.generateAll({ url: 'https://vimeo.com/test4' });
+  t.after(async () => {
+    await fs.rm(path.join(db.OUTPUTS_DIR, jobId), { recursive: true, force: true });
+  });
+  // 끊긴 지도 흉내: 저장된 지도를 마지막 항목 앞에서 자른다
+  const file = path.join(db.OUTPUTS_DIR, jobId, 'contents.json');
+  const CUT = '- 강의 한 줄: 끊긴 지도\n- 수강생의 말·실패 장면:\n  - [16:53] "어';
+  const list = JSON.parse(await fs.readFile(file, 'utf8')).map((c) => (c.type === gen.LECTURE_MAP_TYPE ? { ...c, content: CUT } : c));
+  await fs.writeFile(file, JSON.stringify(list, null, 2), 'utf8');
+  assert.ok(gen.isCutOffLectureMap({ content: CUT, version: 1 }));
+  assert.ok(!gen.isCutOffLectureMap({ content: `${CUT}\n- 검색어 후보: 코트 만들기`, version: 1 }));
+
+  calls.length = 0;
+  await gen.revise({ jobId, type: 'caption', instruction: '첫 줄만 고쳐' });
+  assert.equal(calls[0].step, '강의 파악', '끊긴 지도를 그대로 썼다');
+  assert.ok(!calls[1].prompt.includes('끊긴 지도') && calls[1].prompt.includes(MAP_TEXT), '캡션 수정이 끊긴 지도를 받았다');
+  assert.ok((await gen.loadLectureMap(jobId))?.includes('검색어 후보'), '다시 만든 지도가 최신 버전으로 저장되지 않았다');
+
+  // 다시 만든 지도(버전 2)는 마지막 항목이 없더라도 또 만들지 않는다 — 매번 새로 만드는 일이 없게
+  assert.ok(!gen.isCutOffLectureMap({ content: CUT, version: 2 }));
+  calls.length = 0;
+  await gen.revise({ jobId, type: 'caption', instruction: '한 번 더' });
+  assert.equal(promptsOf('강의 파악').length, 0, '이미 다시 만든 지도를 또 만들었다');
 });
 
 // ── 3. 후크 채택안 파서 — 갈래 넷(공감형·참여유도형·반전형·위기형) 전부 읽는다 ─────────────

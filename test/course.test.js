@@ -95,8 +95,8 @@ mock.module('../src/anthropic.js', {
     MODELS: { VOICE: 'x', CAFE: 'x', CAPTION: 'x', CAROUSEL: 'x', CAPTURE: 'x' },
     callClaude: async ({ step, prompt, transcript }) => {
       calls.push({ step, prompt, transcript });
-      if (step === '강의 파악') return `- 강의 한 줄: 가짜 강의 지도 ${transcript.slice(0, 12)}`;
-      if (step === '강좌 파악') return '- 강별 배움: 가짜 강좌 지도';
+      if (step === '강의 파악') return `- 강의 한 줄: 가짜 강의 지도 ${transcript.slice(0, 12)}\n- 검색어 후보: 가짜 검색어`;
+      if (step === '강좌 파악') return '- 강별 배움: 가짜 강좌 지도\n- 검색어 후보: 가짜 검색어';
       return `가짜 결과 (${step})`;
     },
   },

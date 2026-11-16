@@ -51,15 +51,28 @@ export async function loadLectureMap(jobId) {
 }
 
 /**
- * 강의 지도를 읽고, 없으면 원본 자막으로 만들어 저장한 뒤 돌려준다.
+ * 끊긴 채 저장된 강의 지도인가 — 지도의 마지막 항목('검색어 후보')이 없으면 중간에 끊긴 것이다.
+ * 2026-11-04~11-16에 출력 한도가 사고 토큰에 먹혀 지도가 중간까지만 저장됐고(anthropic.js MAX_OUTPUT_TOKENS 주석),
+ * 지도는 작업당 한 번만 만들어 계속 쓰므로 그 반쪽 지도가 이후 기획에 전부 실렸다. 그런 지도는 다음에 쓸 때 다시 만든다.
+ * 한 작업에서 한 번만 고친다(첫 버전일 때만) — 다시 만든 지도를 또 의심해 매번 새로 만드는 일이 없게.
+ */
+export function isCutOffLectureMap(row) {
+  const text = (row?.content || '').trim();
+  return !!text && !/검색어\s*후보/.test(text) && (row.version ?? 1) <= 1;
+}
+
+/**
+ * 강의 지도를 읽고, 없으면(또는 끊긴 채 저장돼 있으면) 원본 자막으로 만들어 저장한 뒤 돌려준다.
  * 강좌 작업이면 강별 지도(강 작업마다 1회)를 먼저 갖춘 뒤 그 위에 '강좌 지도'를 만들어 같은 타입으로 저장한다 —
  * 4종·수정·재생성은 강의 지도 자리에 강좌 지도를 그대로 받는다.
  * @param {object} job
  * @param {(payload: object) => void} [onProgress] 단계 알림(강별 지도·강좌 지도)
  */
 export async function ensureLectureMap(job, onProgress = () => {}) {
-  const saved = await loadLectureMap(job.id);
-  if (saved) return saved;
+  const row = await getLatestContent(job.id, LECTURE_MAP_TYPE);
+  const saved = (row?.content || '').trim();
+  if (saved && !isCutOffLectureMap(row)) return saved;
+  if (saved) console.warn(`강의 파악: 저장된 강의 지도가 중간에 끊겨 있어 다시 만듭니다 (${saved.length}자, 작업 ${job.id})`);
   if (isCourseJob(job)) return buildCourseMap(job, onProgress);
   if (!job.transcript_full) throw new Error('강의 파악: 이 작업에는 저장된 원본 자막이 없습니다.');
   console.log('강의 파악 중... (원본 자막 전체를 읽어 강의 지도 작성)');
@@ -68,7 +81,6 @@ export async function ensureLectureMap(job, onProgress = () => {}) {
     system: COMMON_HEADER,
     prompt: buildLectureMapPrompt({ topic: job.topic || undefined, title: job.video_title || undefined }),
     transcript: job.transcript_full,
-    maxTokens: 4000,
     step: '강의 파악',
   });
   await saveContent(job.id, LECTURE_MAP_TYPE, map);
@@ -101,7 +113,6 @@ async function buildCourseMap(job, onProgress) {
     system: COMMON_HEADER,
     prompt: buildCourseMapPrompt({ name: course.name, lectures }),
     transcript: job.transcript_full,
-    maxTokens: 6000,
     step: '강좌 파악',
   });
   await saveContent(job.id, LECTURE_MAP_TYPE, map);
@@ -220,7 +231,6 @@ async function fitCutCount({ content, job, voice, cafe, caption, concept, lectur
       course,
     }),
     transcript: job.transcript_full || job.transcript_compressed,
-    maxTokens: 16000,
     step: `${label} 컷 수 조정`,
   });
   const second = normalizeCarouselCuts(retried, `${label} 컷 수 조정`);
@@ -252,7 +262,6 @@ function buildSectionSpecs({ voice, topic, concept, lectureMap, course, compress
       model: MODELS.CAROUSEL,
       transcript: full,
       prompt: buildCarouselPrompt({ voice, topic, concept, lectureMap, course }),
-      maxTokens: 16000, // 장면 지시서 형식이라 출력이 길다 — 잘림 방지
     },
     {
       type: 'capture',
@@ -305,7 +314,6 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
         system: COMMON_HEADER,
         prompt,
         transcript: spec.transcript,
-        maxTokens: spec.maxTokens || 8000,
         step: `${label} 생성`,
       });
       if (spec.type === 'carousel') {
@@ -590,7 +598,6 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
     system: COMMON_HEADER,
     prompt: buildRevisePrompt({ type, original: latest.content, instruction, voice, concept, lectureMap, course, ...extra }),
     transcript,
-    maxTokens: type === 'carousel' ? 16000 : 8000, // 캐러셀은 장면 지시서 형식이라 출력이 길다
     step: `${label} 수정`,
   });
   if (type === 'carousel') {
@@ -613,7 +620,6 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
         system: COMMON_HEADER,
         prompt: buildCapturePrompt({ cafe: content, concept, course, lectureMap }),
         transcript: job.transcript_full, // 타임스탬프 정확도를 위해 원본 자막
-        maxTokens: 8000,
         step: '캡쳐 가이드 갱신',
       });
       await saveContent(jobId, 'capture', capture);
@@ -657,7 +663,6 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
             carousel: content,
           }),
           transcript,
-          maxTokens: 8000,
           step: '인스타 캡션 결 맞추기',
         });
         await saveContent(jobId, 'caption', captionOut);
@@ -701,7 +706,6 @@ export async function regenerateSecondary({ jobId }) {
     system: COMMON_HEADER,
     prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice, lectureMap }),
     transcript: job.transcript_full || job.transcript_compressed,
-    maxTokens: 16000,
     step: '캐러셀 기획 재생성',
   });
   carousel = await finalizeCarousel({
@@ -716,7 +720,6 @@ export async function regenerateSecondary({ jobId }) {
     system: COMMON_HEADER,
     prompt: buildRegeneratePrompt({ type: 'capture', ...context, lectureMap }),
     transcript: job.transcript_full, // 캡쳐는 타임스탬프 정확도를 위해 원본 자막 사용
-    maxTokens: 8000,
     step: '캡쳐 가이드 재생성',
   });
   await saveContent(jobId, 'capture', capture);

@@ -41,7 +41,7 @@
 ## 모델 선택
 - 강의 지도·4종·보이스 학습 전부 **`claude-opus-5-5`**, `output_config.effort: high` (`src/anthropic.js`). 2026-11-04에 `claude-opus-4-8`에서 올림 — 후속 모델이고 더 싸다. 한 모델이라 자막 프롬프트 캐시가 전부 재사용된다.
 - **모델은 저절로 바뀌지 않는다.** 새 모델이 나오면 `.env`/Render 환경변수 `CLAUDE_MODEL`(사고 깊이는 `CLAUDE_EFFORT`)로 배포 없이 바꾸거나 `anthropic.js`의 `PINNED_MODEL`을 올린다. 서버가 켜질 때 모델 목록 API를 한 번 보고(`resolveModel`, 토큰 0) 더 새 Opus가 있으면 `/api/status.model.newer`로 내려 화면 상태줄에 알린다. `CLAUDE_MODEL=auto`면 켜질 때 가장 새 Opus를 골라 쓴다(Fable·Sonnet은 후보 아님). 기본은 알림만 — 세대가 바뀌면 API 규칙·값·글 결이 같이 바뀔 수 있어 한 강 돌려 보고 바꾼다. `test/model.test.js`. Opus 5.5는 사고가 항상 켜져 있어 `thinking`을 끄거나 `temperature`·prefill·강제 `tool_choice`를 보내면 400이다 — 지금 코드는 아무것도 안 보낸다.
-- 한국어 출력이 기니 `max_tokens`는 4000 이상.
+- **출력 한도(`max_tokens`)는 사고 + 본문 합계다 — 본문 길이에 맞춰 줄이지 않는다.** `anthropic.js`의 `MAX_OUTPUT_TOKENS`(64000) 한 값을 모든 호출이 쓰고(호출부에서 `maxTokens`를 따로 주지 않는다), 응답은 스트리밍으로 받는다. 2026-11-04에 모델만 올리고 한도를 4000~16000으로 둔 탓에 사고 토큰이 한도를 먹어 11-11·11-16에 강의 지도·카페 글·캐러셀이 중간에 끊긴 채 저장됐다(카페 글 한 편에 사고 포함 12,000토큰이 나간다). **끊긴 글은 저장하지 않고 오류로 던진다**(`stop_reason: max_tokens`·끝맺음 없는 스트림). 그때 끊긴 채 저장된 강의 지도(마지막 항목 '검색어 후보' 없음)는 다음에 쓸 때 한 번 다시 만든다(`isCutOffLectureMap`). `test/anthropic.test.js`.
 
 ## 코딩 컨벤션
 - 프롬프트 문자열은 `src/prompts.js` 한 곳에 모으고, 코드 로직과 섞지 않는다.
