@@ -57,6 +57,32 @@ export function deriveCourseName(titles) {
   return trimmed.length >= 3 ? trimmed : cleaned[0].replace(/[\s\-–—:·(\[/+,]+$/u, '').trim();
 }
 
+/**
+ * 강의 하나의 제목에서 시리즈 이름과 회차를 읽는다 — 같은 시리즈의 다른 강을 찾을 때 쓴다(generate.js seriesWhyBlock).
+ * "핸메-5강-코트 완성하기" → { key: '핸메', n: 5 }, "(편집중)빈티지데님 원피스 01강-재단부터" → { key: '빈티지데님원피스', n: 1 },
+ * "1강-크롭데님쟈켓(OT+…)" → { key: '크롭데님쟈켓', n: 1 }. 회차 표기("n강·n회차·n주차")가 없으면 null.
+ * @returns {{ key: string, name: string, n: number } | null}
+ */
+export function seriesOf(title) {
+  // 앞머리 메모("(편집중)", "(원본 1차)", "[수정]")는 시리즈 이름이 아니다
+  const t = String(title || '').trim().replace(/^(?:\s*(?:\([^)]*\)|\[[^\]]*\]))+\s*/u, '');
+  let name;
+  let n;
+  const head = t.match(/^(?:제\s*)?(\d+)\s*(?:강|회차|주차)\s*[-–—:·.)\]]*\s*(.+)$/u); // "1강-크롭데님쟈켓(…)"
+  if (head) {
+    n = Number(head[1]);
+    name = head[2].split(/[(\[]/u)[0];
+  } else {
+    const tail = t.match(/^(.+?)\s*[-–—:·(\[]?\s*(?:제\s*)?(\d+)\s*(?:강|회차|주차)(?![가-힣])/u); // "핸메-5강-…", "초급정규8강-…"
+    if (!tail) return null;
+    name = tail[1];
+    n = Number(tail[2]);
+  }
+  name = name.replace(/[\s\-–—:·(\[/+,]+$/u, '').trim();
+  const key = name.replace(/\s+/g, '').toLowerCase();
+  return key.length >= 2 ? { key, name, n } : null;
+}
+
 /** 저장된 자막 텍스트("[MM:SS] 말") → 간격마다 첫 줄만 남긴 압축본. 시각 줄이 아닌 줄은 버린다 */
 export function compressTranscriptText(text, intervalSec = COURSE_COMPRESS_SEC) {
   const out = [];

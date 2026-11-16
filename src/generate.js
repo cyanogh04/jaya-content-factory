@@ -25,8 +25,9 @@ import {
   buildRegeneratePrompt,
   CAROUSEL_CUT_MIN,
   CAROUSEL_CUT_MAX,
+  MAP_WHY_ITEM,
 } from './prompts.js';
-import { saveJob, saveContent, getJob, getLatestContent, findJobByVideoId } from './db.js';
+import { saveJob, saveContent, getJob, getLatestContent, findJobByVideoId, listJobs } from './db.js';
 import { reviewCardCopy } from './copyedit.js';
 import {
   COURSE_TYPE,
@@ -36,6 +37,7 @@ import {
   deriveCourseName,
   buildCourseTranscript,
   newCourseVideoId,
+  seriesOf,
 } from './course.js';
 
 // 강의 지도 — 원본 자막 전체를 읽어 "이 강의가 어떤 강의인지"(강의 한 줄·주인공 배움·덤·결과물…)를 정리한 것.
@@ -51,14 +53,95 @@ export async function loadLectureMap(jobId) {
 }
 
 /**
- * 끊긴 채 저장된 강의 지도인가 — 지도의 마지막 항목('검색어 후보')이 없으면 중간에 끊긴 것이다.
- * 2026-11-04~11-16에 출력 한도가 사고 토큰에 먹혀 지도가 중간까지만 저장됐고(anthropic.js MAX_OUTPUT_TOKENS 주석),
- * 지도는 작업당 한 번만 만들어 계속 쓰므로 그 반쪽 지도가 이후 기획에 전부 실렸다. 그런 지도는 다음에 쓸 때 다시 만든다.
- * 한 작업에서 한 번만 고친다(첫 버전일 때만) — 다시 만든 지도를 또 의심해 매번 새로 만드는 일이 없게.
+ * 다시 만들어야 하는 강의 지도인가 — 아래 둘 중 하나면 다음에 쓸 때 다시 만든다.
+ *  (1) 끊긴 지도: 마지막 항목('검색어 후보')이 없다. 2026-11-04~11-16에 출력 한도가 사고 토큰에 먹혀 지도가 중간까지만
+ *      저장됐고(anthropic.js MAX_OUTPUT_TOKENS 주석), 지도는 작업당 한 번만 만들어 계속 쓰므로 반쪽 지도가 이후 기획에 전부 실렸다.
+ *  (2) 옛 형식 지도: '이렇게 만드는 이유' 항목이 없다(2026-11-16에 추가 — 캡션·캐러셀이 이 항목을 중심 재료로 쓴다).
+ * 한 작업에서 두 번까지만 다시 만든다(끊김 한 번 + 형식 한 번) — 모델이 항목을 빠뜨려도 매번 새로 만드는 일이 없게.
  */
-export function isCutOffLectureMap(row) {
+export function isStaleLectureMap(row) {
   const text = (row?.content || '').trim();
-  return !!text && !/검색어\s*후보/.test(text) && (row.version ?? 1) <= 1;
+  if (!text) return false;
+  const current = /검색어\s*후보/.test(text) && text.includes(MAP_WHY_ITEM);
+  return !current && (row.version ?? 1) <= 2;
+}
+
+/** 강의 지도에서 '이렇게 만드는 이유' 항목의 내용만 떼어 낸다 — 항목이 없거나 "없음"이면 '' */
+export function extractWhyItem(map) {
+  const lines = String(map || '').split('\n');
+  const start = lines.findIndex((l) => /^[-*•]\s/.test(l) && l.includes(MAP_WHY_ITEM));
+  if (start < 0) return '';
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^[-*•]\s/.test(lines[i])) { // 다음 항목(들여쓰기 없는 글머리)에서 끝
+      end = i;
+      break;
+    }
+  }
+  const first = lines[start].slice(lines[start].indexOf(MAP_WHY_ITEM) + MAP_WHY_ITEM.length).replace(/^[\s*:：]+/, '');
+  const body = [first, ...lines.slice(start + 1, end)].map((l) => l.trimEnd()).filter((l) => l.trim()).join('\n').trim();
+  return !body || /^\W*없음/.test(body) ? '' : body;
+}
+
+// 같은 시리즈(제목의 시리즈 이름이 같고 회차가 다른 강의)의 다른 강에서 자야쌤이 밝힌 '이렇게 만드는 이유'를 가져온다.
+// 이유는 강좌에서 한 번만 말한다 — "핸드메이드 코트에 왜 안감을 넣는지"는 4강에 있고, 안감을 마무리하는 5강에는 없다.
+// 5강만 읽어서는 "왜 이렇게 만드는지"를 쓸 수 없어 만드는 방법만 늘어놓게 된다(2026-11-16).
+// 가까운 회차부터 네 강까지 본다. 그 강의 지도가 옛 형식이면 그때 한 번 다시 만든다(강마다 모델 호출 1회 — 다음부터는 저장본).
+const SERIES_SIBLING_MAX = 4;
+
+/**
+ * @returns {Promise<string>} 지도 뒤에 덧붙일 블록(없으면 ''). 실패해도 기획을 막지 않는다.
+ */
+export async function seriesWhyBlock(job) {
+  if (process.env.JAYA_NO_SERIES) return ''; // 가짜 모델로 도는 개발 서버(test/mock-server.mjs)가 실제 작업의 지도를 건드리지 않게
+  if (!job || isCourseJob(job)) return ''; // 강좌 작업은 강좌 지도가 이미 모든 강의 이유를 모은다
+  const me = seriesOf(job.video_title);
+  if (!me) return '';
+  try {
+    const byN = new Map(); // 회차 → 가장 최근 작업 (listJobs는 최신순)
+    for (const j of await listJobs(300)) {
+      if (j.id === job.id || j.kind === 'course') continue;
+      const s = seriesOf(j.video_title);
+      if (!s || s.key !== me.key || s.n === me.n || byN.has(s.n)) continue;
+      byN.set(s.n, j);
+    }
+    const picked = [...byN.entries()]
+      .sort((a, b) => Math.abs(a[0] - me.n) - Math.abs(b[0] - me.n) || a[0] - b[0])
+      .slice(0, SERIES_SIBLING_MAX);
+    if (picked.length === 0) return '';
+
+    const found = [];
+    for (let i = 0; i < picked.length; i += 2) { // 두 강씩 — 긴 자막 호출을 한꺼번에 쏘지 않는다
+      const pair = await Promise.all(
+        picked.slice(i, i + 2).map(async ([n, lite]) => {
+          try {
+            const sibling = await getJob(lite.id);
+            if (!sibling?.transcript_full) return null;
+            const why = extractWhyItem(await ensureLectureMap(sibling));
+            return why ? { n, title: sibling.video_title, why } : null;
+          } catch (err) {
+            console.warn(`시리즈 이유: ${n}강 지도를 읽지 못해 건너뜁니다 — ${err.message}`);
+            return null;
+          }
+        })
+      );
+      found.push(...pair.filter(Boolean));
+    }
+    if (found.length === 0) return '';
+    found.sort((a, b) => a.n - b.n);
+    console.log(`시리즈 이유: ${me.name} ${found.map((f) => `${f.n}강`).join('·')}에서 '${MAP_WHY_ITEM}'를 가져왔습니다`);
+    return `
+
+[같은 시리즈의 다른 강에서 밝힌 이유 — 이 강의 자막에는 없지만, 같은 수업(${me.name})의 다른 강에서 자야쌤이 직접 말한 '${MAP_WHY_ITEM}'다]
+${found.map((f) => `▸ ${f.n}강 · ${f.title}\n${f.why}`).join('\n')}
+- 같은 옷을 여러 강에 걸쳐 만드는 수업이면, 위 이유들은 이 강의가 완성해 가는 **바로 그 옷**을 왜 이렇게 만드는지다. 입는 사람이 공감할 이유를 골라
+  "${me.name} 수업에서는 ~"처럼 수업 전체의 이야기로 쓴다. 이 강의에서 하는 작업과 이어지는 이유(이 강의에서 안감을 마무리한다면 '안감을 넣는 이유')를 먼저 쓴다.
+- 강마다 다른 옷을 만드는 수업이면(위 강 제목이 서로 다른 옷이면) 다른 옷의 이유는 끌어오지 않는다.
+- 여기 적힌 시각은 다른 강의 것이다. 이 강의의 실사캡쳐 시각으로 쓰지 않는다.`;
+  } catch (err) {
+    console.warn(`시리즈 이유: 같은 시리즈의 다른 강을 찾지 못했습니다 — ${err.message}`);
+    return '';
+  }
 }
 
 /**
@@ -71,8 +154,8 @@ export function isCutOffLectureMap(row) {
 export async function ensureLectureMap(job, onProgress = () => {}) {
   const row = await getLatestContent(job.id, LECTURE_MAP_TYPE);
   const saved = (row?.content || '').trim();
-  if (saved && !isCutOffLectureMap(row)) return saved;
-  if (saved) console.warn(`강의 파악: 저장된 강의 지도가 중간에 끊겨 있어 다시 만듭니다 (${saved.length}자, 작업 ${job.id})`);
+  if (saved && !isStaleLectureMap(row)) return saved;
+  if (saved) console.warn(`강의 파악: 저장된 강의 지도가 끊겼거나 옛 형식이라 다시 만듭니다 (${saved.length}자, 작업 ${job.id})`);
   if (isCourseJob(job)) return buildCourseMap(job, onProgress);
   if (!job.transcript_full) throw new Error('강의 파악: 이 작업에는 저장된 원본 자막이 없습니다.');
   console.log('강의 파악 중... (원본 자막 전체를 읽어 강의 지도 작성)');
@@ -243,7 +326,7 @@ async function fitCutCount({ content, job, voice, cafe, caption, concept, lectur
 }
 
 /** 섹션별 호출 사양 구성 */
-function buildSectionSpecs({ voice, topic, concept, lectureMap, course, compressed, full }) {
+function buildSectionSpecs({ voice, topic, concept, lectureMap, planMap, course, compressed, full }) {
   return [
     {
       type: 'cafe',
@@ -255,13 +338,13 @@ function buildSectionSpecs({ voice, topic, concept, lectureMap, course, compress
       type: 'caption',
       model: MODELS.CAPTION,
       transcript: full, // 강의 정체를 잡아야 하므로 원본 자막 (지도와 함께)
-      prompt: buildCaptionPrompt({ voice, topic, concept, lectureMap, course }),
+      prompt: buildCaptionPrompt({ voice, topic, concept, lectureMap: planMap, course }),
     },
     {
       type: 'carousel',
       model: MODELS.CAROUSEL,
       transcript: full,
-      prompt: buildCarouselPrompt({ voice, topic, concept, lectureMap, course }),
+      prompt: buildCarouselPrompt({ voice, topic, concept, lectureMap: planMap, course }),
     },
     {
       type: 'capture',
@@ -282,6 +365,8 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
   // 강의 지도가 먼저다 — 캡션·캐러셀은 이걸 없이 쓰면 강의 전체를 모른 채 눈에 띄는 문장부터 잡는다.
   // 지도 작성이 실패하면 4종 전체를 멈춘다(지도 없는 캡션·캐러셀은 예전 실패로 돌아가는 것이라 의미가 없다).
   const lectureMap = await ensureLectureMap(job, onProgress);
+  // 캡션·캐러셀은 같은 시리즈 다른 강의 '이렇게 만드는 이유'까지 붙인 지도를 받는다(카페·캡쳐는 이전 그대로)
+  const planMap = lectureMap + (await seriesWhyBlock(job));
   const course = await loadCourse(job.id); // 강좌 작업이면 4종 전부에 강좌 블록을 싣는다
 
   const specs = buildSectionSpecs({
@@ -289,6 +374,7 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
     topic,
     concept,
     lectureMap,
+    planMap,
     course,
     compressed: job.transcript_compressed,
     full: job.transcript_full,
@@ -307,7 +393,7 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
         spec.type === 'capture'
           ? buildCapturePrompt({ cafe: results.cafe, concept, course, lectureMap })
           : spec.type === 'carousel'
-            ? buildCarouselPrompt({ voice, topic, concept, lectureMap, caption: results.caption, course })
+            ? buildCarouselPrompt({ voice, topic, concept, lectureMap: planMap, caption: results.caption, course })
             : spec.prompt;
       let content = await callClaude({
         model: spec.model,
@@ -318,7 +404,7 @@ async function runSections({ job, voice, topic, concept, onProgress }) {
       });
       if (spec.type === 'carousel') {
         content = await finalizeCarousel({
-          content, job, voice, cafe: results.cafe, caption: results.caption, concept, lectureMap, course, label,
+          content, job, voice, cafe: results.cafe, caption: results.caption, concept, lectureMap: planMap, course, label,
         });
       }
       await saveContent(job.id, spec.type, content);
@@ -578,7 +664,7 @@ export async function revise({ jobId, type, instruction, alignCaption = true }) 
   // 캡션·캐러셀 수정은 강의 지도와 원본 자막을 쓴다(옛 작업이면 여기서 지도를 만들어 채운다). 카페는 이전 그대로 —
   // 단, 강좌 작업의 카페 글은 강별 안내가 지도에서 오므로 강좌 지도를 싣는다.
   const usesMap = type === 'caption' || type === 'carousel' || !!course;
-  const lectureMap = usesMap ? await ensureLectureMap(job) : undefined;
+  const lectureMap = usesMap ? (await ensureLectureMap(job)) + (type === 'cafe' ? '' : await seriesWhyBlock(job)) : undefined;
   const transcript = usesMap ? job.transcript_full || job.transcript_compressed : job.transcript_compressed;
 
   // 캐러셀 수정은 확정된 카페·캡션을 컨텍스트로 넣는다(없으면 자막만으로 진행).
@@ -697,6 +783,7 @@ export async function regenerateSecondary({ jobId }) {
   const voice = await loadVoice();
   const concept = await loadConcept(jobId);
   const lectureMap = await ensureLectureMap(job);
+  const planMap = lectureMap + (await seriesWhyBlock(job));
   const course = await loadCourse(jobId);
   const context = { cafe: cafeRow.content, caption: captionRow.content, topic: job.topic || undefined, concept, course };
 
@@ -704,12 +791,12 @@ export async function regenerateSecondary({ jobId }) {
   let carousel = await callClaude({
     model: MODELS.CAROUSEL,
     system: COMMON_HEADER,
-    prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice, lectureMap }),
+    prompt: buildRegeneratePrompt({ type: 'carousel', ...context, voice, lectureMap: planMap }),
     transcript: job.transcript_full || job.transcript_compressed,
     step: '캐러셀 기획 재생성',
   });
   carousel = await finalizeCarousel({
-    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, lectureMap, course, label: '캐러셀 기획 재생성',
+    content: carousel, job, voice, cafe: context.cafe, caption: context.caption, concept, lectureMap: planMap, course, label: '캐러셀 기획 재생성',
   });
   await saveContent(jobId, 'carousel', carousel);
   console.log('캐러셀 기획 재생성 완료');

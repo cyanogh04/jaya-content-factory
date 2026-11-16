@@ -99,7 +99,7 @@ mock.module('../src/anthropic.js', {
     MODELS: { VOICE: 'x', CAFE: 'x', CAPTION: 'x', CAROUSEL: 'x', CAPTURE: 'x' },
     callClaude: async ({ step, prompt, transcript }) => {
       calls.push({ step, prompt, transcript });
-      if (step === '강의 파악') return `- 강의 한 줄: 가짜 강의 지도 (${step})\n- 검색어 후보: 가짜 검색어`;
+      if (step === '강의 파악') return `- 강의 한 줄: 가짜 강의 지도 (${step})\n- 이렇게 만드는 이유: 없음\n- 검색어 후보: 가짜 검색어`;
       return `가짜 결과 (${step})`;
     },
   },
@@ -222,8 +222,9 @@ test('강의 지도가 없는 옛 작업은 수정할 때 지도를 만들어 �
 });
 
 // 2026-11-16: 모델을 Opus 5.5로 올린 뒤 출력 한도가 사고 토큰에 먹혀 강의 지도가 중간까지만 저장됐고(마지막 항목 '검색어 후보' 없음),
-// 지도는 작업당 한 번만 만들기 때문에 그 반쪽 지도가 이후 수정·재기획에 계속 실렸다. 끊긴 지도는 다음에 쓸 때 한 번 다시 만든다.
-test('끊긴 채 저장된 강의 지도는 다음에 쓸 때 다시 만든다 — 한 작업에서 한 번만', async (t) => {
+// 지도는 작업당 한 번만 만들기 때문에 그 반쪽 지도가 이후 수정·재기획에 계속 실렸다. 끊긴 지도는 다음에 쓸 때 다시 만든다.
+// 같은 날 지도에 '이렇게 만드는 이유' 항목을 더했다 — 그 항목이 없는 옛 형식 지도도 다음에 쓸 때 다시 만든다(캡션·캐러셀의 중심 재료).
+test('끊겼거나 옛 형식인 강의 지도는 다음에 쓸 때 다시 만든다 — 한 작업에서 두 번까지만', async (t) => {
   const { jobId } = await gen.generateAll({ url: 'https://vimeo.com/test4' });
   t.after(async () => {
     await fs.rm(path.join(db.OUTPUTS_DIR, jobId), { recursive: true, force: true });
@@ -233,8 +234,13 @@ test('끊긴 채 저장된 강의 지도는 다음에 쓸 때 다시 만든다 �
   const CUT = '- 강의 한 줄: 끊긴 지도\n- 수강생의 말·실패 장면:\n  - [16:53] "어';
   const list = JSON.parse(await fs.readFile(file, 'utf8')).map((c) => (c.type === gen.LECTURE_MAP_TYPE ? { ...c, content: CUT } : c));
   await fs.writeFile(file, JSON.stringify(list, null, 2), 'utf8');
-  assert.ok(gen.isCutOffLectureMap({ content: CUT, version: 1 }));
-  assert.ok(!gen.isCutOffLectureMap({ content: `${CUT}\n- 검색어 후보: 코트 만들기`, version: 1 }));
+  const OLD = '- 강의 한 줄: 옛 형식 지도\n- 검색어 후보: 코트 만들기'; // 끝까지 왔지만 '이렇게 만드는 이유'가 없다
+  const NOW = '- 강의 한 줄: 지금 형식\n- 이렇게 만드는 이유: 없음\n- 검색어 후보: 코트 만들기';
+  assert.ok(gen.isStaleLectureMap({ content: CUT, version: 1 }), '끊긴 지도');
+  assert.ok(gen.isStaleLectureMap({ content: OLD, version: 1 }), '옛 형식 지도');
+  assert.ok(gen.isStaleLectureMap({ content: OLD, version: 2 }), '끊겨서 한 번 다시 만든 옛 형식 지도');
+  assert.ok(!gen.isStaleLectureMap({ content: NOW, version: 1 }));
+  assert.ok(!gen.isStaleLectureMap({ content: OLD, version: 3 }), '두 번 다시 만든 뒤에는 그만둔다');
 
   calls.length = 0;
   await gen.revise({ jobId, type: 'caption', instruction: '첫 줄만 고쳐' });
@@ -242,11 +248,77 @@ test('끊긴 채 저장된 강의 지도는 다음에 쓸 때 다시 만든다 �
   assert.ok(!calls[1].prompt.includes('끊긴 지도') && calls[1].prompt.includes(MAP_TEXT), '캡션 수정이 끊긴 지도를 받았다');
   assert.ok((await gen.loadLectureMap(jobId))?.includes('검색어 후보'), '다시 만든 지도가 최신 버전으로 저장되지 않았다');
 
-  // 다시 만든 지도(버전 2)는 마지막 항목이 없더라도 또 만들지 않는다 — 매번 새로 만드는 일이 없게
-  assert.ok(!gen.isCutOffLectureMap({ content: CUT, version: 2 }));
+  // 다시 만든 지도는 또 만들지 않는다
   calls.length = 0;
   await gen.revise({ jobId, type: 'caption', instruction: '한 번 더' });
   assert.equal(promptsOf('강의 파악').length, 0, '이미 다시 만든 지도를 또 만들었다');
+});
+
+// 2026-11-16: 자야쌤 — "말투가 불편하고, 제작 과정을 자꾸 설명하려 한다. 알아듣지 못할 수업 내용 열거가 너무 많다."
+// 캐러셀·캡션은 수업을 한 번도 안 들은 사람에게 '왜 이렇게 만드는지 → 그래서 무엇까지 배우는지'를 쉬운 말로 소개한다.
+// 이유는 강좌에서 한 번만 말하므로(안감을 넣는 이유는 4강, 안감을 마무리하는 건 5강) 같은 시리즈 다른 강의 지도에서도 가져온다.
+test('같은 시리즈의 다른 강에서 밝힌 이유 — 캡션·캐러셀 프롬프트에 실리고, 카페 글에는 실리지 않는다', async (t) => {
+  const SERIES = `시리즈테스트${Date.now()}`;
+  const WHY4 = '안감 넣기 — 보통은 안감 없이 만든다 / 정전기가 나고 다리에 감겨서 [67:19]';
+  const save = (n) => db.saveJob({ video_id: `${SERIES}-${n}`, video_title: `${SERIES}-${n}강-테스트`, vimeo_url: 'https://vimeo.com/x', topic: null, transcript_compressed: '압축', transcript_full: '[00:00] 원본' });
+  const four = await save(4);
+  const five = await save(5);
+  const other = await db.saveJob({ video_id: `${SERIES}-x`, video_title: `다른수업${Date.now()}-4강-테스트`, vimeo_url: 'https://vimeo.com/y', topic: null, transcript_compressed: '압축', transcript_full: '[00:00] 원본' });
+  t.after(async () => {
+    for (const j of [four, five, other]) await fs.rm(path.join(db.OUTPUTS_DIR, j.id), { recursive: true, force: true });
+  });
+  await db.saveContent(four.id, gen.LECTURE_MAP_TYPE, `- 강의 한 줄: 4강\n- 이렇게 만드는 이유:\n  - ${WHY4}\n- 검색어 후보: 안감`);
+  await db.saveContent(other.id, gen.LECTURE_MAP_TYPE, '- 강의 한 줄: 다른 수업\n- 이렇게 만드는 이유: 다른수업이유-7c2e\n- 검색어 후보: x');
+  await db.saveContent(five.id, gen.LECTURE_MAP_TYPE, '- 강의 한 줄: 5강\n- 이렇게 만드는 이유: 없음\n- 검색어 후보: 코트');
+  for (const type of ['cafe', 'caption', 'carousel']) await db.saveContent(five.id, type, `원본 ${type}`);
+
+  assert.equal(gen.extractWhyItem(await gen.loadLectureMap(four.id)), `- ${WHY4}`);
+  assert.equal(gen.extractWhyItem(await gen.loadLectureMap(five.id)), '', '"없음"은 이유가 아니다');
+  const block = await gen.seriesWhyBlock(five);
+  assert.ok(block.includes(WHY4) && block.includes('▸ 4강'), '4강의 이유를 가져오지 못했다');
+  assert.ok(!block.includes('다른수업이유-7c2e'), '다른 시리즈의 이유를 끌어왔다');
+  assert.equal(await gen.seriesWhyBlock(four), '', '이유가 없는 강("없음")만 있으면 블록을 만들지 않는다');
+
+  for (const type of ['caption', 'carousel']) {
+    calls.length = 0;
+    await gen.revise({ jobId: five.id, type, instruction: '고쳐', alignCaption: false });
+    const p = calls.find((c) => c.step === `${L[type]} 수정`).prompt;
+    assert.ok(p.includes(WHY4), `${type} 수정 프롬프트에 4강의 이유가 없다`);
+  }
+  calls.length = 0;
+  await gen.revise({ jobId: five.id, type: 'cafe', instruction: '고쳐' });
+  assert.ok(!calls[0].prompt.includes(WHY4), '카페 글은 이전 그대로여야 한다');
+  assert.equal(promptsOf('강의 파악').length, 0, '지금 형식 지도를 다시 만들었다');
+});
+
+test('캐러셀·캡션은 수업을 소개하는 글 — 이유 중심·쉬운 말·자신감 블록이 실리고, 카페 글 프롬프트에는 없다', () => {
+  const MARKS = ['[읽는 사람 — 이 수업을 한 번도 듣지 않은 사람]', '[자야쌤 수업의 자신감', '[쉬운 말로 쓴다'];
+  const built = {
+    carousel: prompts.buildCarouselPrompt({ voice }),
+    caption: prompts.buildCaptionPrompt({ voice }),
+    captionRevise: prompts.buildRevisePrompt({ type: 'caption', original: '원본', instruction: '고쳐', voice }),
+    carouselRevise: prompts.buildRevisePrompt({ type: 'carousel', original: '원본', instruction: '고쳐', voice }),
+  };
+  for (const [name, p] of Object.entries(built)) {
+    for (const m of MARKS) assert.ok(p.includes(m), `${name}: ${m} 블록이 없다`);
+    assert.ok(!p.includes('[노출 수위 — 후킹과 강의 보호'), `${name}: 옛 [노출 수위](진단은 다 준다)가 남아 수업 속 설명을 끌어온다`);
+    assert.ok(!/한 끗 차이로|반이 정해져요\."\s*—/.test(p.replace(/×[^\n]*/g, '')), `${name}: 좋은 예시에 멋 부린 말이 남아 있다`);
+  }
+  // 카드는 소개하는 사람의 말(자야쌤 3인칭) — 수업 시간의 말이 아니다
+  assert.ok(built.carousel.includes('자야쌤은 3인칭'));
+  assert.ok(!built.carousel.includes('수강생 앞에서 소리 내어'), '카드를 수업 시간의 말로 쓰게 하는 지시가 남아 있다');
+  // 카드용 우리말 규칙은 어순·번역투만 — 평범한 서술어("중요합니다")를 막는 상투 관용구 목록은 싣지 않는다
+  assert.ok(built.carousel.includes('▸ 우리말 어순') && built.carousel.includes('▸ 번역투') && !built.carousel.includes('▸ 상투 관용구'));
+  // 지도: 새 항목은 시간 비중으로 고르지 않고, 마지막 항목은 여전히 '검색어 후보'
+  for (const map of [prompts.buildLectureMapPrompt({}), prompts.buildCourseMapPrompt({ name: '강좌', lectures: [{ n: 1, title: '1강', map: '지도' }] })]) {
+    assert.ok(map.includes(`- ${prompts.MAP_WHY_ITEM}:`) && map.includes('시간 비중으로 고르지 않는다'));
+    assert.ok(map.indexOf(`- ${prompts.MAP_WHY_ITEM}:`) < map.indexOf('- 검색어 후보:'), "'검색어 후보'가 마지막 항목이어야 끊긴 지도를 가려낼 수 있다");
+  }
+  // 카페 글은 이번 변경 범위 밖
+  for (const p of [prompts.buildCafePrompt({ voice }), prompts.buildRevisePrompt({ type: 'cafe', original: '원본', instruction: '고쳐', voice })]) {
+    for (const m of MARKS) assert.ok(!p.includes(m), `카페 글 프롬프트에 ${m}가 들어갔다`);
+    assert.ok(p.includes('[노출 수위 — 후킹과 강의 보호'));
+  }
 });
 
 // ── 3. 후크 채택안 파서 — 갈래 넷(공감형·참여유도형·반전형·위기형) 전부 읽는다 ─────────────
